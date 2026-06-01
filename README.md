@@ -1,1 +1,428 @@
-# short_video_generator
+# Short Video Generator
+
+Turn a single storyboard markdown file into a finished, **bilingual** (Indonesian
++ English) Manim tutorial video — in both **landscape** and **portrait** — with
+narration, spoken audio, and synchronized subtitles, end to end.
+
+Two CLI arguments drive the whole thing: the storyboard file and an output
+directory. Every intermediate artifact (narration scripts, audio, raw renders,
+muxed clips, final videos, subtitles) lands under the output directory.
+
+```
+storyboard.md ─▶ narration scripts (Claude | Codex) ─▶ MP3 + SRT (Edge | Gemini TTS)
+   ─▶ Manim scene .py (Claude | Codex when missing) ─▶ rendered MP4 (landscape + portrait)
+   ─▶ per-scene clips (ffmpeg mux) ─▶ concatenated MP4 + merged SRT
+```
+
+The storyboard intentionally contains **no narration text and no Manim scene
+code** — just a description per scene. When narration or a scene `.py` file is
+missing, the configured AI CLI writes it from the description. Both the narrator
+and the TTS engine are swappable.
+
+---
+
+## Features
+
+- **One storyboard in, narrated videos out** — landscape *and* portrait from the
+  same scene sources, so the result doubles as long-form and Reels/Shorts/TikTok.
+- **Bilingual** — Indonesian + English narration, audio, and subtitles in one run.
+- **Swappable narrator** — Claude Code (default, reuses your `claude` session, no
+  API key) or the Codex CLI (`--ai-cli codex`). Used to write missing narration
+  *and* missing Manim scene files from each scene's description.
+- **Swappable TTS** — free Microsoft **Edge TTS** (default, no key, exact subtitle
+  timing, default voice `id-ID-ArdiNeural`) or Google **Gemini TTS**
+  (`--tts gemini`, nicer voices, needs an API key, estimated subtitle timing,
+  default voice `Iapetus`).
+- **Per-run voice selection** — `--voice` overrides the voice for every language,
+  or set per-language voices in the storyboard's `voices:` map.
+- **Robust AI scene generation** — generated Manim sources are Pango-escaped
+  (bare `&` → `&amp;`) and `ast.parse()`-checked before they hit disk, so a
+  malformed scene fails at generation time, not six scenes into a render.
+- **Self-bootstrapping** — first run creates a project-local `.venv` at the repo
+  root, installs its Python deps (PyYAML, srt, manim, edge-tts), and re-execs
+  inside it. Launch it with any Python 3.
+- **Resumable** — every stage skips artifacts that already exist; re-run anytime,
+  or run a single stage with `--stage` and a single scene with `--only`.
+- **Bring your own Manim sources** — point `scenes_*_dir` at hand-authored scenes
+  to skip AI scene generation entirely.
+
+---
+
+## Requirements
+
+### System tools (must be on your `PATH`)
+
+| Tool | Provides | Needed for | Install (Debian/Ubuntu) |
+|------|----------|------------|--------------------------|
+| `ffmpeg`, `ffprobe` | video/audio encoding & probing | **always** | `sudo apt install ffmpeg` |
+| `claude` | narration / scene generation | default AI CLI | [Claude Code](https://claude.com/claude-code) |
+| `codex` | narration / scene generation | `--ai-cli codex` | `npm install -g @openai/codex` |
+
+`manim` and `edge-tts` are **not** system tools here — they are Python packages
+installed automatically into the project-local `.venv` (see below).
+
+### Python
+
+- **Python 3.10+** to launch the script (it self-bootstraps the rest).
+- **Runtime deps** — `PyYAML`, `srt`, `manim`, `edge-tts`, listed in
+  [`video_generator/requirements.txt`](video_generator/requirements.txt) and
+  installed **automatically** into `.venv` on first run. You don't install them
+  yourself.
+- **Gemini TTS** (`--tts gemini`) needs **no extra Python package** — it calls
+  the REST API over the standard library and pipes audio through `ffmpeg`.
+
+### Credentials / accounts
+
+| For | What you need | How to set it |
+|-----|---------------|---------------|
+| Claude narrator (default) | A logged-in Claude Code session (no API key) | `claude` then `/login`, or `ANTHROPIC_API_KEY` |
+| Codex narrator | A logged-in Codex CLI | `codex login` |
+| Gemini TTS | A Gemini API key | `GEMINI_API_KEY` env var, a `.env` at the repo root, or `--gemini-api-key` |
+
+> Edge TTS (the default voice engine) needs **no key and no account**. A minimal
+> run needs only `ffmpeg` + a logged-in `claude` (or pre-filled narration).
+
+---
+
+## Installation & setup
+
+### 1. System tools
+
+```bash
+sudo apt update && sudo apt install -y ffmpeg
+ffmpeg -version | head -1
+```
+
+### 2. Python dependencies (automatic)
+
+There is **no manual install step**. The first time you run `generate_video.py`
+it self-bootstraps:
+
+1. Creates `.venv` at the repo root.
+2. Installs `PyYAML`, `srt`, `manim`, `edge-tts` (from
+   [`video_generator/requirements.txt`](video_generator/requirements.txt)).
+3. Re-launches itself inside that `.venv`.
+
+```bash
+# Any Python 3 triggers the one-time bootstrap, then prints help:
+python3 video_generator/generate_video.py --help
+```
+
+> If `.venv` ever breaks, just delete it — it's rebuilt on the next run:
+> `rm -rf .venv`.
+
+### 3. AI CLI — pick one
+
+**Claude (default):** install [Claude Code](https://claude.com/claude-code) and
+log in once:
+
+```bash
+claude            # then run /login, or export ANTHROPIC_API_KEY=sk-ant-...
+echo "Reply OK" | claude -p     # verify it answers
+```
+
+**Codex (optional, for `--ai-cli codex`):**
+
+```bash
+npm install -g @openai/codex
+codex login
+```
+
+> The CLI binary is located via `$CLAUDE_BIN` / `$CODEX_BIN`, then `PATH`, then
+> `~/.local/bin/<cli>`. Pre-fill every narration + scene `.py` and pass
+> `--no-ai-cli-check` to skip needing an AI CLI at all.
+
+### 4. Gemini TTS key (optional, for `--tts gemini`)
+
+Get a key from **[Google AI Studio](https://aistudio.google.com/apikey)**, then
+provide it in any **one** of these ways:
+
+```bash
+# a) a .env at the repo root (auto-read; keep it gitignored)
+echo 'GEMINI_API_KEY=YOUR_KEY_HERE' >> .env
+
+# b) an environment variable
+export GEMINI_API_KEY=YOUR_KEY_HERE
+
+# c) pass it inline
+python3 video_generator/generate_video.py ... --tts gemini --gemini-api-key YOUR_KEY_HERE
+```
+
+Resolution order: `--gemini-api-key` → `$GEMINI_API_KEY` → `gemini_api_key:` in
+the storyboard front-matter → a `.env` at the repo root. The preview TTS model
+is rate-limited on the free tier; smoke-test a single scene with `--only` first.
+
+---
+
+## Quick start
+
+```bash
+python3 video_generator/generate_video.py \
+    --storyboard video_generator/examples/pythagorean_theorem_storyboard.md \
+    --output     /tmp/pythagorean_build
+```
+
+After it finishes:
+
+```
+/tmp/pythagorean_build/
+├── scripts/{id,en}/<scene>.txt          ← narration text per language
+├── audio/{id,en}/<scene>.mp3            ← TTS output
+├── subtitles/{id,en}/<scene>.srt
+├── scenes_landscape/                     ← _common.py + per-scene .py
+├── scenes_portrait/
+├── assets/fonts/                         ← copied from templates
+├── manim_media/{id,en}/{landscape,portrait}/
+├── video/{id,en}/{landscape,portrait}/<scene>.mp4
+├── clips/{id,en}/{landscape,portrait}/<scene>.mp4
+├── final/{id,en}/<title>_landscape.mp4
+├── final/{id,en}/<title>_portrait.mp4
+└── subtitles/{id,en}/<title>.srt         ← merged with proper timestamps
+```
+
+---
+
+## How it works (the seven stages)
+
+Run everything (default) or just one stage with `--stage`:
+
+| Stage | What it does |
+| --- | --- |
+| `scripts` | Fill in any missing narration via the AI CLI; write `scripts/<lang>/*.txt` |
+| `audio`   | Run the TTS engine on each script; write `audio/<lang>/*.mp3` + per-scene `subtitles/<lang>/*.srt` |
+| `scenes`  | Materialize `scenes_<orient>/_common.py` from templates and AI-generate any missing per-scene `.py` files |
+| `render`  | Run Manim with `MANIM_LANG=<lang>` and `MANIM_AUDIO_DIR=<output>/audio` for each (lang, orientation) pair |
+| `mux`     | Combine raw video + MP3 into per-scene clips at 48 kHz stereo AAC |
+| `concat`  | Concat clips into `final/<lang>/<title>_<orient>.mp4` |
+| `srt`     | Merge per-scene SRTs into `subtitles/<lang>/<title>.srt` with proper offsets |
+| `all`     | (default) all of the above, in order |
+
+---
+
+## Storyboard format
+
+A storyboard is a markdown file with **YAML front-matter** (between two `---`
+lines) followed by one **`## Scene:`** heading per scene. Narration text and the
+Manim scene `.py` files are intentionally NOT in the storyboard — they're
+generated by the AI CLI from each scene's `### description`.
+
+```markdown
+---
+title: pythagorean_theorem
+languages: [id, en]
+orientations: [landscape, portrait]
+voices:                       # per-language voice; optional — defaults apply
+  id: id-ID-ArdiNeural        #   edge default: id-ID-ArdiNeural (Ardi)
+  en: en-US-GuyNeural         #   gemini default: Iapetus (one voice is multilingual)
+tts_provider: edge            # edge | gemini   (CLI --tts overrides this)
+gemini_model: gemini-2.5-flash-preview-tts   # optional; only used for gemini
+ai_cli: claude                # claude | codex  (CLI --ai-cli overrides this)
+fps: 30
+resolution_landscape: [1920, 1080]
+# scenes_landscape_dir / scenes_portrait_dir are optional — when omitted,
+# the generator creates fresh ones under <output>/scenes_<orient>/.
+---
+
+# Project description (free-form)
+
+## Scene: 01_pengantar / Pengantar
+
+**file:** scene_01_pengantar.py
+**fallback_duration:** 14
+
+### description
+Title card. Introduce the theorem by name, hint at the right-triangle setup,
+and frame the learning goal for the next two minutes.
+```
+
+The `## Scene:` heading carries `<basename> / <ClassName>`. The body's
+`**file:**`, `**fallback_duration:**`, and (optionally) `**class:**` lines
+override defaults. Subsections like `### description`, `### narration.id`,
+`### narration.en`, `### notes` are all read in. If `narration.<lang>` is absent,
+the AI CLI writes it. If a scene's `.py` file is absent, the AI CLI generates it
+from the description + narration + embedded `_common.py` helpers.
+
+### Bringing your own Manim sources
+
+Point at existing hand-authored scenes from the front-matter:
+
+```yaml
+scenes_landscape_dir: ../../manim_claude/scenes_landscape
+scenes_portrait_dir:  ../../manim_claude/scenes_portrait
+```
+
+Paths resolve relative to the storyboard file. When `scenes_<orient>_dir` is
+provided and exists, those files are used as-is and AI scene generation is
+skipped entirely.
+
+---
+
+## Usage examples
+
+```bash
+# Default: Claude narrator + Edge TTS (free, no key)
+python3 video_generator/generate_video.py --storyboard SB.md --output OUT
+
+# Claude narrator + Gemini TTS, voice Iapetus
+python3 video_generator/generate_video.py --storyboard SB.md --output OUT \
+    --tts gemini --voice Iapetus
+
+# Codex narrator instead of Claude
+python3 video_generator/generate_video.py --storyboard SB.md --output OUT \
+    --ai-cli codex
+
+# Edge female voice override for every language
+python3 video_generator/generate_video.py --storyboard SB.md --output OUT \
+    --voice id-ID-GadisNeural
+
+# Smoke-test one scene's narration + audio only
+python3 video_generator/generate_video.py --storyboard SB.md --output OUT \
+    --stage audio --only 01_pengantar
+
+# Force a clean rebuild from scratch
+python3 video_generator/generate_video.py --storyboard SB.md --output OUT --force
+```
+
+---
+
+## Command-line options
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--storyboard PATH` | *(required)* | Storyboard markdown file |
+| `--output DIR` | *(required)* | Output directory (all intermediates go here) |
+| `--stage STAGE` | `all` | One of `scripts`, `audio`, `scenes`, `render`, `mux`, `concat`, `srt`, or `all` |
+| `--only SCENE…` | *(all)* | Restrict to a subset of scene basenames |
+| `--force` | off | Wipe generator-owned subdirs and rebuild from a clean slate |
+| `--ai-cli {claude,codex}` | `claude` | AI CLI for missing narration / scene `.py`. Overrides `ai_cli:` |
+| `--tts {edge,gemini}` | *(front-matter)* | TTS provider. Overrides `tts_provider:` when set |
+| `--voice NAME` | *(front-matter)* | Override the voice for every language this run |
+| `--gemini-api-key KEY` | *(env / .env)* | Gemini API key |
+| `--skip-dep-check` | off | Skip the startup dependency validation |
+| `--no-ai-cli-check` | off | Don't enforce AI CLI presence (every narration / scene `.py` pre-filled) |
+
+> `--force` removes only generator-owned subdirectories under `--output`
+> (`scripts/`, `audio/`, `subtitles/`, `video/`, `clips/`, `final/`,
+> `scenes_landscape/`, `scenes_portrait/`, `manim_media/`, `assets/`). Files you
+> placed there yourself (a `.gitignore`, a README, etc.) are left alone.
+
+---
+
+## How AI generation works
+
+When a piece is missing, the generator shells out to the chosen CLI in
+non-interactive `-p / --print` mode and pipes the prompt on stdin:
+
+- **Narration prompt** — receives the project brief, scene description, fallback
+  duration, and (if available) the narration in the other language. Returns plain
+  narration text in the requested language.
+- **Scene prompt** — receives the project brief, scene description, narration in
+  both languages, the verbatim `_common.py`, and the `scene_skeleton.py`
+  reference. Returns a complete Manim scene file.
+
+Each AI-generated scene file is post-processed before it's written:
+
+- **Pango-escape pass** — bare `&` in short string literals is rewritten to
+  `&amp;` (unless it already starts a recognised entity like `&amp;`, `&lt;`,
+  `&#…;`). The `_common.py` text helpers feed Pango `MarkupText`, which otherwise
+  crashes on a raw ampersand. (Caveat: literals inside `code_card(...)` are
+  escaped too, so pre-escape or base64 code samples that legitimately contain `&`.)
+- **Syntax check** — the rewritten source is `ast.parse()`d before being written;
+  a `SyntaxError` aborts the build with a file + line + column pointer.
+
+### Claude authentication
+
+The generator invokes `claude` with `-p --permission-mode bypassPermissions
+--allow-dangerously-skip-permissions --disable-slash-commands
+--exclude-dynamic-system-prompt-sections`. It deliberately **does not** pass
+`--bare`, so the OAuth session from `claude /login` is honored.
+
+Authenticate either way:
+
+1. **Interactive OAuth (desktop):** `claude /login`, then verify with
+   `echo "Reply with just OK" | claude -p`.
+2. **API key (headless / CI):** `export ANTHROPIC_API_KEY=sk-ant-...`.
+
+> Common pitfall: if `claude /login` succeeded but the generator still says "Not
+> logged in", you previously added `--bare`. Remove it; the current version omits
+> it intentionally.
+
+---
+
+## Fonts
+
+Fonts live in [`video_generator/templates/assets/fonts/`](video_generator/templates/assets/fonts/)
+and are copied into each build's `assets/fonts/`, then registered with
+`manimpango` by the scene `_common.py`:
+
+- **Non-code text** (titles, body, subtitles) uses the proportional **Noto Sans**
+  (`BODY_FONT`) for even, kerned spacing. Weights Regular / Medium / SemiBold /
+  Bold are bundled.
+- **Code** uses **JetBrains Mono NL** (`CODE_FONT`).
+- **Noto Sans Mono** stays registered, so a scene can opt into a monospace look
+  explicitly with `font="Noto Sans Mono"`. (It's not the default — a monospace
+  font forces every glyph to one fixed width, which spaces prose unevenly.)
+
+---
+
+## Common pitfalls
+
+- Use only standard two-letter language codes (`id`, `en`). The bundled
+  `_common.py` reads `MANIM_LANG` / `LANG_CODE` and only recognises those.
+- Edge TTS's `en-US-GuyNeural` is male; `en-US-JennyNeural` is female. Gemini
+  voices (e.g. `Iapetus`, `Charon`) are multilingual — one voice covers both
+  languages.
+- Gemini subtitle timing is **estimated** (narration split into sentences,
+  allocated proportionally over the measured audio duration), whereas Edge timing
+  is exact (word-level). Expect coarser cues with `--tts gemini`.
+- For portrait, do not pass a custom resolution — the frame dims are baked into
+  `templates/scenes_portrait/_common.py`.
+- The bottom 2/10 of the portrait frame is reserved for Reels/Shorts/TikTok
+  caption overlays; keep content above `SHORTS_SAFE_BOTTOM = -4.8`.
+- AI-generated scene files aren't guaranteed to compile first try. After a
+  `--stage scenes` run, review the generated `.py` files before `--stage render`.
+
+---
+
+## Testing
+
+The suite lives in [`tests/`](tests/) and runs against the project-local `.venv`.
+Install the dev dependency once, then run pytest:
+
+```bash
+.venv/bin/pip install -r video_generator/requirements-dev.txt
+.venv/bin/python -m pytest
+```
+
+- **Unit tests** ([tests/test_unit.py](tests/test_unit.py)) — storyboard parsing,
+  voice/key resolution, timestamp + estimated-SRT math, the Pango ampersand
+  escape, the AST syntax guard, prompt construction, TTS dispatch, CLI overrides,
+  and Gemini HTTP parsing (with `urlopen` mocked). No tools or network needed.
+- **Integration tests** ([tests/test_integration.py](tests/test_integration.py),
+  marked `integration`) — mux/concat/SRT-merge and the Gemini PCM→MP3 path driven
+  through real `ffmpeg`/`ffprobe` on fabricated silent media. Auto-skipped if a
+  tool is missing.
+- **Live TTS** (marked `network`) — opt in with `VIDEO_GENERATOR_NETWORK_TESTS=1`
+  to exercise the real Edge TTS service.
+
+```bash
+.venv/bin/python -m pytest -m "not integration"        # fast unit-only run
+VIDEO_GENERATOR_NETWORK_TESTS=1 .venv/bin/python -m pytest -m network
+```
+
+---
+
+## Notes on `_common.py`
+
+The bundled `_common.py` honors `MANIM_AUDIO_DIR` when computing per-scene target
+durations:
+
+```python
+audio_root = os.environ.get("MANIM_AUDIO_DIR")
+base = Path(audio_root) if audio_root else ROOT_DIR / "audio"
+audio_path = base / LANG_CODE / f"{scene_name}.mp3"
+```
+
+The generator always sets this to `<output>/audio`, so Manim picks up the
+freshly-generated narration timings without any path manipulation in the scene
+files themselves.

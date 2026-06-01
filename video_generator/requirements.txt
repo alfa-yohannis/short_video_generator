@@ -1,0 +1,6 @@
+# Python dependencies for video_generator, auto-installed into the project-local
+# .venv (at the repo root) on first run by generate_video.py's bootstrap.
+PyYAML
+srt
+manim
+edge-tts
