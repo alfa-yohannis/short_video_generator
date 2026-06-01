@@ -62,6 +62,34 @@ PYTHON_BIN = VENV_BIN / "python"
 MANIM_BIN = VENV_BIN / "manim"
 EDGE_TTS_BIN = VENV_BIN / "edge-tts"
 
+
+# --- Progress logging with elapsed time -----------------------------------
+# Every progress line is prefixed with [MM:SS] elapsed since the build started,
+# so the duration of each step is visible as the delta between lines. Slow steps
+# (AI calls, TTS, renders) also print their own "done in Xs".
+
+_T0 = time.monotonic()
+
+
+def _reset_clock() -> None:
+    global _T0
+    _T0 = time.monotonic()
+
+
+def _elapsed() -> float:
+    return time.monotonic() - _T0
+
+
+def _clock() -> str:
+    e = int(_elapsed())
+    return f"{e // 60:02d}:{e % 60:02d}"
+
+
+def log(msg: str) -> None:
+    """Print a progress line prefixed with elapsed [MM:SS]."""
+    print(f"[{_clock()}] {msg}", flush=True)
+
+
 # Voice / TTS defaults. Used when the storyboard's `voices:` map omits a
 # language, or when a provider/voice isn't pinned on the command line.
 DEFAULT_EDGE_VOICE = "id-ID-ArdiNeural"
@@ -401,15 +429,24 @@ def run_ai_cli(cli: str, prompt: str) -> str:
         # Don't pass --bare here: with --bare, Claude Code ignores OAuth/keychain
         # auth entirely and demands ANTHROPIC_API_KEY. We want the subprocess
         # to inherit the user's interactive `/login` session.
+        #
+        # `--tools ""` disables ALL tools. Without it, Claude Code runs as an
+        # agent: instead of printing the requested file to stdout it uses its
+        # Write tool to create the file and prints a prose summary ("Created
+        # `scene.py` — ..."), which then fails ast.parse. Disabling tools forces
+        # a plain text response that IS the file content.
         cmd = [
             binary, "-p",
+            "--tools", "",
             "--permission-mode", "bypassPermissions",
             "--allow-dangerously-skip-permissions",
             "--disable-slash-commands",
             "--exclude-dynamic-system-prompt-sections",
         ]
     elif cli == "codex":
-        cmd = [binary, "exec", "--quiet"]
+        # --sandbox read-only stops codex from writing the file itself (same
+        # agentic pitfall as claude above); we want the content on stdout.
+        cmd = [binary, "exec", "--quiet", "--sandbox", "read-only"]
     else:
         raise SystemExit(f"Unknown ai_cli '{cli}'. Use 'claude' or 'codex'.")
     proc = subprocess.run(
@@ -468,8 +505,10 @@ def ensure_narration(sb: Storyboard, sc: Scene, lang: str, output: "Path | None"
             if text:
                 sc.narration[lang] = text
                 return text
-    print(f"  ai-fill narration.{lang} for {sc.basename} via {sb.ai_cli}…")
+    log(f"  ai-fill narration.{lang} for {sc.basename} via {sb.ai_cli}…")
+    _t = time.monotonic()
     text = run_ai_cli(sb.ai_cli, build_narration_prompt(sb, sc, lang))
+    log(f"    ↳ narration.{lang}/{sc.basename} in {time.monotonic() - _t:.1f}s")
     if not text:
         raise SystemExit(
             f"AI CLI returned empty narration for {sc.basename}/{lang}. "
@@ -688,7 +727,8 @@ def ensure_scene_files(sb: Storyboard, output: Path, force: bool) -> Tuple[Path,
                     "configured to generate it. Either drop the .py in place "
                     "or set `ai_cli: claude` in the storyboard front-matter."
                 )
-            print(f"  ai-generate {orient}/{sc.file} via {sb.ai_cli}…")
+            log(f"  ai-generate {orient}/{sc.file} via {sb.ai_cli}…")
+            _t = time.monotonic()
             prompt = _build_scene_prompt(sb, sc, orient, skeleton, common_src)
             scene_src = run_ai_cli(sb.ai_cli, prompt)
             scene_src = _strip_code_fences(scene_src)
@@ -697,6 +737,7 @@ def ensure_scene_files(sb: Storyboard, output: Path, force: bool) -> Tuple[Path,
             scene_src = _escape_unsafe_ampersands(scene_src)
             _validate_scene_source(scene_path, scene_src)
             scene_path.write_text(scene_src.rstrip() + "\n", encoding="utf-8")
+            log(f"    ↳ {orient}/{sc.file} in {time.monotonic() - _t:.1f}s")
     return landscape_dir, portrait_dir
 
 
@@ -781,7 +822,8 @@ def _generate_audio_edge(sb: Storyboard, output: Path, force: bool) -> None:
             srt = srt_dir / f"{sc.basename}.srt"
             if mp3.exists() and srt.exists() and not force:
                 continue
-            print(f"  edge-tts {voice} -> {lang}/{sc.basename}")
+            log(f"  edge-tts {voice} -> {lang}/{sc.basename}…")
+            _t = time.monotonic()
             subprocess.run(
                 [
                     str(EDGE_TTS_BIN),
@@ -792,6 +834,7 @@ def _generate_audio_edge(sb: Storyboard, output: Path, force: bool) -> None:
                 ],
                 check=True,
             )
+            log(f"    ↳ {lang}/{sc.basename}.mp3 in {time.monotonic() - _t:.1f}s")
 
 
 # --- Gemini TTS -----------------------------------------------------------
@@ -924,7 +967,8 @@ def _generate_audio_gemini(sb: Storyboard, output: Path, force: bool,
             srt = srt_dir / f"{sc.basename}.srt"
             if mp3.exists() and srt.exists() and not force:
                 continue
-            print(f"  gemini {sb.gemini_model}/{voice} -> {lang}/{sc.basename}")
+            log(f"  gemini {sb.gemini_model}/{voice} -> {lang}/{sc.basename}…")
+            _t = time.monotonic()
             attempts = retries + 1
             last_err: "BaseException | None" = None
             for attempt in range(1, attempts + 1):
@@ -939,9 +983,10 @@ def _generate_audio_gemini(sb: Storyboard, output: Path, force: bool,
                             f"gemini TTS failed for {lang}/{sc.basename} after "
                             f"{attempts} attempts: {e}"
                         )
-                    print(f"    retry {attempt}/{attempts} ({type(e).__name__}: {e}); "
-                          f"waiting {wait}s…")
+                    log(f"    retry {attempt}/{attempts} ({type(e).__name__}: {e}); "
+                        f"waiting {wait}s…")
                     time.sleep(wait)
+            log(f"    ↳ {lang}/{sc.basename}.mp3 in {time.monotonic() - _t:.1f}s")
 
 
 def render_manim(sb: Storyboard, output: Path, lang: str, orient: str, force: bool,
@@ -978,8 +1023,10 @@ def render_manim(sb: Storyboard, output: Path, lang: str, orient: str, force: bo
             "--media_dir", str(media_dir),
             str(scene_path), sc.classname,
         ]
-        print(f"  render {lang}/{orient}/{sc.basename}::{sc.classname}")
+        log(f"  render {lang}/{orient}/{sc.basename}::{sc.classname}…")
+        _t = time.monotonic()
         subprocess.run(cmd, check=True, env=env, cwd=str(scenes_dir))
+        log(f"    ↳ {lang}/{orient}/{sc.basename}.mp4 in {time.monotonic() - _t:.1f}s")
 
         stem = scene_path.stem
         candidates = list((media_dir / "videos" / stem).rglob(f"{sc.classname}.mp4"))
@@ -1245,8 +1292,8 @@ def generate_youtube(sb: Storyboard, output: Path, force: bool) -> None:
             continue
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(_youtube_text(title, desc, keywords), encoding="utf-8")
-        print(f"  -> {out_path} (title {len(title)}/{YT_TITLE_MAX}, "
-              f"desc {len(desc)}/{YT_DESC_MAX}, keywords {len(keywords)}/{YT_KEYWORDS_MAX})")
+        log(f"  -> {out_path} (title {len(title)}/{YT_TITLE_MAX}, "
+            f"desc {len(desc)}/{YT_DESC_MAX}, keywords {len(keywords)}/{YT_KEYWORDS_MAX})")
 
 
 # --- CLI ------------------------------------------------------------------
@@ -1304,6 +1351,7 @@ def _wipe_outputs(output: Path) -> None:
 
 
 def cmd_build(args: argparse.Namespace) -> None:
+    _reset_clock()
     storyboard_path = Path(args.storyboard).resolve()
     need_ai_cli: str | None = None
     if not args.skip_dep_check:
@@ -1359,47 +1407,61 @@ def cmd_build(args: argparse.Namespace) -> None:
         if not sb.scenes:
             raise SystemExit(f"No scenes matched --only filter: {args.only}")
 
+    def _stage(label: str):
+        """Print a stage header and return a closer that logs its duration."""
+        log(label)
+        start = time.monotonic()
+        return lambda: log(f"  ✓ {label.split('] ', 1)[-1]} in {time.monotonic() - start:.1f}s")
+
     if args.stage in ("all", "scripts"):
-        print("[1/8] write narration scripts (AI-generated when missing)")
+        done = _stage("[1/8] write narration scripts (AI-generated when missing)")
         write_narration_scripts(sb, output)
+        done()
     if args.stage in ("all", "audio"):
-        print("[2/8] generate audio + per-scene SRTs")
+        done = _stage("[2/8] generate audio + per-scene SRTs")
         # Make sure narration is populated even if --stage audio is run alone.
         for sc in sb.scenes:
             for lang in sb.languages:
                 ensure_narration(sb, sc, lang, output=output)
         generate_audio(sb, output, args.force)
+        done()
     if args.stage in ("all", "scenes"):
-        print("[3/8] materialize scene .py files (AI-generated when missing)")
+        done = _stage("[3/8] materialize scene .py files (AI-generated when missing)")
         ensure_scene_files(sb, output, args.force)
+        done()
     if args.stage in ("all", "render"):
-        print("[4/8] render Manim scenes")
+        done = _stage("[4/8] render Manim scenes")
         # Render assumes scene .py files exist; populate dirs from defaults.
         ensure_scene_files(sb, output, force=False)
         for lang in sb.languages:
             for orient in sb.orientations:
                 render_manim(sb, output, lang, orient, args.force,
                              check_layout=args.check_layout)
+        done()
     if args.stage in ("all", "mux"):
-        print("[5/8] mux clips (video + audio)")
+        done = _stage("[5/8] mux clips (video + audio)")
         for lang in sb.languages:
             for orient in sb.orientations:
                 mux_clips(sb, output, lang, orient, args.force)
+        done()
     if args.stage in ("all", "concat"):
-        print("[6/8] concat per-scene clips into final videos")
+        done = _stage("[6/8] concat per-scene clips into final videos")
         for lang in sb.languages:
             for orient in sb.orientations:
                 final = concat_final(sb, output, lang, orient)
-                print(f"  -> {final}")
+                log(f"  -> {final}")
+        done()
     if args.stage in ("all", "srt"):
-        print("[7/8] merge per-scene SRTs into final SRTs")
+        done = _stage("[7/8] merge per-scene SRTs into final SRTs")
         for lang in sb.languages:
             merged = merge_srts(sb, output, lang)
-            print(f"  -> {merged}")
+            log(f"  -> {merged}")
+        done()
     if args.stage in ("all", "youtube") and not args.skip_youtube:
-        print("[8/8] generate YouTube metadata (per language)")
+        done = _stage("[8/8] generate YouTube metadata (per language)")
         generate_youtube(sb, output, args.force)
-    print("\nDone.")
+        done()
+    log(f"Done in {_clock()}.")
 
 
 def main() -> None:
