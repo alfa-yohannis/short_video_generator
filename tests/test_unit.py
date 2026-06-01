@@ -306,6 +306,23 @@ def test_strip_code_fences_fenced(g):
     assert g._strip_code_fences(text) == "from manim import *\nx = 1"
 
 
+def test_strip_code_fences_drops_prose_preamble(g):
+    # The failure mode that aborted a real build: a prose line before the code
+    # (the "30s" makes ast choke on an invalid decimal literal).
+    text = "Here is scene 6, the conclusion, about 30s long:\nfrom manim import *\nx = 1\n"
+    assert g._strip_code_fences(text) == "from manim import *\nx = 1"
+
+
+def test_strip_code_fences_prose_then_fence(g):
+    text = "Sure! Here's the file:\n```python\nfrom manim import *\ny = 2\n```\nHope that helps."
+    assert g._strip_code_fences(text) == "from manim import *\ny = 2"
+
+
+def test_strip_code_fences_keeps_clean_source(g):
+    src = "from manim import *\nfrom _common import title_text\n\nclass S(Scene):\n    pass"
+    assert g._strip_code_fences(src) == src
+
+
 # --- AST validation --------------------------------------------------------
 
 

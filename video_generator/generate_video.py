@@ -577,14 +577,33 @@ Return ONLY the Python file contents.
 """
 
 
+_FENCE_BLOCK_RE = re.compile(r"```(?:python|py)?[ \t]*\n(.*?)```", re.S | re.I)
+
+
 def _strip_code_fences(text: str) -> str:
+    """Pull a clean Python source out of an AI reply.
+
+    Handles the two ways the model strays from "output only the file":
+      1. It wraps the file in a ``` fence (optionally with prose around it) —
+         take the first fenced block.
+      2. It prepends a prose sentence before the code (e.g. "Here is scene 6,
+         ~30s:") — the leading non-code line then makes `ast.parse` choke (a
+         bare "30s" is an invalid decimal literal). The scene prompt mandates
+         `from manim import *` as the first line, so we drop everything before
+         the first import line.
+    """
     text = text.strip()
-    if text.startswith("```"):
-        # remove first fence line
-        first_nl = text.find("\n")
-        text = text[first_nl + 1 :] if first_nl != -1 else text
-    if text.endswith("```"):
-        text = text[: text.rfind("```")].rstrip()
+    m = _FENCE_BLOCK_RE.search(text)
+    if m:
+        text = m.group(1).strip()
+    lines = text.splitlines()
+    start = next((i for i, ln in enumerate(lines)
+                  if ln.lstrip().startswith("from manim import")), None)
+    if start is None:
+        start = next((i for i, ln in enumerate(lines)
+                      if ln.lstrip().startswith(("from ", "import ", "#!"))), None)
+    if start:  # only trim when real preamble precedes the code (start > 0)
+        text = "\n".join(lines[start:]).strip()
     return text
 
 
