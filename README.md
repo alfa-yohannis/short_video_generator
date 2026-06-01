@@ -158,7 +158,7 @@ is rate-limited on the free tier; smoke-test a single scene with `--only` first.
 
 ```bash
 python3 video_generator/generate_video.py \
-    --storyboard video_generator/examples/pythagorean_theorem_storyboard.md \
+    --storyboard storyboards/pythagorean_theorem_storyboard.md \
     --output     /tmp/pythagorean_build
 ```
 
@@ -177,7 +177,8 @@ After it finishes:
 ├── clips/{id,en}/{landscape,portrait}/<scene>.mp4
 ├── final/{id,en}/<title>_landscape.mp4
 ├── final/{id,en}/<title>_portrait.mp4
-└── subtitles/{id,en}/<title>.srt         ← merged with proper timestamps
+├── subtitles/{id,en}/<title>.srt         ← merged with proper timestamps
+└── youtube/{id,en}/youtube.txt           ← title / description / keywords per language
 ```
 
 ---
@@ -195,6 +196,7 @@ Run everything (default) or just one stage with `--stage`:
 | `mux`     | Combine raw video + MP3 into per-scene clips at 48 kHz stereo AAC |
 | `concat`  | Concat clips into `final/<lang>/<title>_<orient>.mp4` |
 | `srt`     | Merge per-scene SRTs into `subtitles/<lang>/<title>.srt` with proper offsets |
+| `youtube` | Ask the AI CLI for YouTube title/description/keywords per language; write `youtube/<lang>/youtube.txt` |
 | `all`     | (default) all of the above, in order |
 
 ---
@@ -298,6 +300,8 @@ python3 video_generator/generate_video.py --storyboard SB.md --output OUT --forc
 | `--tts {edge,gemini}` | *(front-matter)* | TTS provider. Overrides `tts_provider:` when set |
 | `--voice NAME` | *(front-matter)* | Override the voice for every language this run |
 | `--gemini-api-key KEY` | *(env / .env)* | Gemini API key |
+| `--check-layout {off,warn,strict}` | `off` | At render time, check each scene's text for overflow/clipping, portrait caption-zone violations, and overlap. `warn` logs; `strict` fails the render |
+| `--skip-youtube` | off | Don't generate `youtube/<lang>/youtube.txt` |
 | `--skip-dep-check` | off | Skip the startup dependency validation |
 | `--no-ai-cli-check` | off | Don't enforce AI CLI presence (every narration / scene `.py` pre-filled) |
 
@@ -349,6 +353,60 @@ Authenticate either way:
 
 ---
 
+## Layout self-check
+
+AI-generated scenes occasionally place text past the frame edge, stack two
+labels on the same spot, or (in portrait) drop content into the caption zone.
+`--check-layout` turns on a render-time guard, implemented in the scene
+`_common.py` and run automatically at the end of every `Scene.render`:
+
+- **OVERFLOW** — a text mobject's bounding box extends past the frame.
+- **SAFE-AREA** (portrait only) — text dips below `SHORTS_SAFE_BOTTOM`, into the
+  bottom 2/10 reserved for Reels/Shorts/TikTok captions.
+- **OVERLAP** — two text mobjects overlap by more than half the smaller one's area
+  (ancestor/descendant pairs are ignored).
+
+```bash
+# Log issues but keep rendering:
+python3 video_generator/generate_video.py --storyboard SB.md --output OUT --check-layout warn
+
+# Fail the render on the first scene with a violation (good for CI):
+python3 video_generator/generate_video.py --storyboard SB.md --output OUT --check-layout strict
+```
+
+The generator passes the mode to Manim via the `MANIM_CHECK_LAYOUT` env var, so
+a direct `manim` invocation honors it too. The check targets **text**
+(`Text` / `MarkupText`) — the usual culprit — not decorative shapes, which keeps
+false positives low. Default is `off`, so it never changes a normal render.
+
+---
+
+## YouTube metadata
+
+The final `youtube` stage asks the configured AI CLI to write publishing
+metadata from each language's narration transcript, and writes one file per
+language at `youtube/<lang>/youtube.txt`:
+
+```
+TITLE
+<= 100 chars, searchable terms first, no hashtags
+
+DESCRIPTION
+hook + overview + bulleted coverage, ending with <=15 #hashtags
+
+KEYWORDS
+comma-separated tags, <= 500 chars, no '#'
+```
+
+Each field is sanitised and clamped to YouTube's limits (title 100, description
+5000, keywords 500), emoji are stripped, and description hashtags are capped at
+15 (YouTube ignores them all past 15). It's a trailing nice-to-have: an AI/parse
+failure logs a warning and is skipped — the video itself is unaffected. Disable
+with `--skip-youtube`, or run it alone with `--stage youtube` once narration
+scripts exist.
+
+---
+
 ## Fonts
 
 Fonts live in [`video_generator/templates/assets/fonts/`](video_generator/templates/assets/fonts/)
@@ -359,9 +417,6 @@ and are copied into each build's `assets/fonts/`, then registered with
   (`BODY_FONT`) for even, kerned spacing. Weights Regular / Medium / SemiBold /
   Bold are bundled.
 - **Code** uses **JetBrains Mono NL** (`CODE_FONT`).
-- **Noto Sans Mono** stays registered, so a scene can opt into a monospace look
-  explicitly with `font="Noto Sans Mono"`. (It's not the default — a monospace
-  font forces every glyph to one fixed width, which spaces prose unevenly.)
 
 ---
 

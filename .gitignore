@@ -219,3 +219,5 @@ __marimo__/
 
 # Other
 tmp
+# Manim render output / text caches (should live under the output dir or /tmp)
+media/

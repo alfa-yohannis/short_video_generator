@@ -46,6 +46,41 @@ def g():
     return gv
 
 
+# --- scene _common loaders (need manim) ------------------------------------
+
+TEMPLATES = REPO_ROOT / "video_generator" / "templates"
+
+
+def _load_scene_common(subdir: str, modname: str):
+    """Import a scene `_common.py` under a unique module name. Skips the test
+    when manim / manimpango aren't importable in this interpreter."""
+    path = TEMPLATES / subdir / "_common.py"
+    sys.path.insert(0, str(path.parent))
+    spec = importlib.util.spec_from_file_location(modname, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[modname] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:  # pragma: no cover - depends on env
+        pytest.skip(f"cannot import {subdir}/_common.py ({exc})")
+    # Creating a MarkupText caches an SVG under config.media_dir/texts, which
+    # defaults to ./media (the CWD). Redirect it into the system temp dir so the
+    # test suite never writes a media/ folder into the repo.
+    import tempfile
+    module.config.media_dir = str(Path(tempfile.gettempdir()) / "vg_test_media")
+    return module
+
+
+@pytest.fixture(scope="session")
+def landscape_common():
+    return _load_scene_common("scenes_landscape", "_common_landscape")
+
+
+@pytest.fixture(scope="session")
+def portrait_common():
+    return _load_scene_common("scenes_portrait", "_common_portrait")
+
+
 # --- skip markers ----------------------------------------------------------
 
 

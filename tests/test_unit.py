@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 from argparse import Namespace
 
 import pytest
@@ -461,3 +462,151 @@ def test_gemini_synth_no_audio_raises(g, monkeypatch):
                         lambda req, timeout=None: _FakeResp(json.dumps({"candidates": []}).encode()))
     with pytest.raises(RuntimeError):
         g._gemini_synth("hi", "key", "model", "Iapetus", 30.0)
+
+
+# --- YouTube metadata helpers ----------------------------------------------
+
+
+def test_strip_emoji_hashtags_title(g):
+    out = g._strip_emoji_hashtags("Belajar Pythagoras 🚀 #keren #math sekarang")
+    assert "🚀" not in out
+    assert "#keren" not in out and "#math" not in out
+    assert "Belajar Pythagoras" in out and "sekarang" in out
+
+
+def test_strip_emoji_hashtags_keeps_csharp_and_punctuation(g):
+    out = g._strip_emoji_hashtags("Pemrograman C# — lanjutan… selesai")
+    assert "C#" in out and "—" in out and "…" in out
+
+
+def test_strip_emoji_keeps_hashtags(g):
+    out = g._strip_emoji("Materi keren 🚀\n#Pythagoras #Mathematics")
+    assert "🚀" not in out
+    assert "#Pythagoras" in out and "#Mathematics" in out
+
+
+def test_cap_hashtags_limits_to_15(g):
+    tags = " ".join(f"#tag{i}" for i in range(20))
+    out = g._cap_hashtags("Deskripsi. " + tags, max_tags=15)
+    kept = re.findall(r"#\w+", out)
+    assert len(kept) == 15
+    assert kept[0] == "#tag0" and kept[-1] == "#tag14"
+
+
+def test_cap_hashtags_keeps_all_when_under_limit(g):
+    src = "Deskripsi. #a #b #c"
+    assert g._cap_hashtags(src) == src
+
+
+def test_clamp_word_boundary(g):
+    out = g._clamp("satu dua tiga empat lima enam tujuh", 12)
+    assert len(out) <= 12 and not out.endswith(" ")
+
+
+def test_clamp_under_limit_unchanged(g):
+    assert g._clamp("short", 100) == "short"
+
+
+def test_clamp_keywords_total_and_intact(g):
+    kw = ", ".join(f"tag{i:02d}" for i in range(200))
+    out = g._clamp_keywords(kw, 500)
+    assert len(out) <= 500
+    assert all(t.strip().startswith("tag") for t in out.split(","))
+
+
+def test_clamp_keywords_handles_newlines(g):
+    assert g._clamp_keywords("a,\nb , c\n", 500) == "a, b, c"
+
+
+def test_extract_json_variants(g):
+    assert g._extract_json('{"title": "x"}')["title"] == "x"
+    assert g._extract_json('```json\n{"a": 1}\n```') == {"a": 1}
+    assert g._extract_json('blah {"a": 2} blah') == {"a": 2}
+
+
+def test_youtube_text_layout(g):
+    txt = g._youtube_text("T", "D", "k1, k2")
+    assert txt == "TITLE\nT\n\nDESCRIPTION\nD\n\nKEYWORDS\nk1, k2\n"
+
+
+def test_youtube_prompt_language_and_limits(g):
+    p_en = g._youtube_prompt("Hello world.", "en")
+    assert "English" in p_en and "Hello world." in p_en
+    assert "100 characters" in p_en and "5000 characters" in p_en and "500" in p_en
+    assert "hashtags" in p_en
+    p_id = g._youtube_prompt("Halo dunia.", "id")
+    assert "Indonesian" in p_id and "Halo dunia." in p_id
+
+
+# --- generate_youtube (per-language, run_ai_cli mocked) --------------------
+
+
+def test_generate_youtube_per_language(g, tmp_path, monkeypatch):
+    sb = _sb(g, languages=["id", "en"],
+             scenes=[g.Scene(basename="01_x", classname="X", file="s.py",
+                             fallback_duration=10, description="d",
+                             narration={"id": "Halo.", "en": "Hi."})])
+    # pre-write narration scripts the stage reads
+    for lang, text in (("id", "Materi Pythagoras."), ("en", "Pythagoras material.")):
+        d = tmp_path / "scripts" / lang
+        d.mkdir(parents=True)
+        (d / "01_x.txt").write_text(text, encoding="utf-8")
+
+    seen_langs = []
+
+    def fake_run_ai_cli(cli, prompt):
+        # distinguish by the language's transcript embedded in the prompt
+        lang = "id" if "Materi Pythagoras." in prompt else "en"
+        seen_langs.append(lang)
+        return json.dumps({
+            "title": ("Judul " if lang == "id" else "Title ") + "T" * 130 + " 🚀 #nope",
+            "description": "Hook. 🚀 " + ("x " * 50) + "\n" +
+                           " ".join(f"#tag{i}" for i in range(20)),
+            "keywords": ", ".join(f"kw{i:03d}" for i in range(300)),
+        })
+
+    monkeypatch.setattr(g, "run_ai_cli", fake_run_ai_cli)
+    g.generate_youtube(sb, tmp_path, force=False)
+
+    assert set(seen_langs) == {"id", "en"}
+    for lang in ("id", "en"):
+        out = tmp_path / "youtube" / lang / "youtube.txt"
+        assert out.exists()
+        content = out.read_text(encoding="utf-8")
+        title = content.split("TITLE\n", 1)[1].split("\n\n", 1)[0]
+        desc = content.split("DESCRIPTION\n", 1)[1].split("\n\nKEYWORDS", 1)[0]
+        kw = content.split("KEYWORDS\n", 1)[1].strip()
+        assert len(title) <= g.YT_TITLE_MAX and "🚀" not in title and "#nope" not in title
+        assert len(desc) <= g.YT_DESC_MAX and "🚀" not in desc
+        # hashtags capped at 15 in the description
+        assert len(re.findall(r"#\w+", desc)) <= 15
+        assert len(kw) <= g.YT_KEYWORDS_MAX and "#" not in kw
+
+
+def test_generate_youtube_skips_on_cli_failure(g, tmp_path, monkeypatch):
+    sb = _sb(g, languages=["id"],
+             scenes=[g.Scene(basename="01_x", classname="X", file="s.py",
+                             fallback_duration=10, description="d",
+                             narration={"id": "Halo."})])
+    d = tmp_path / "scripts" / "id"
+    d.mkdir(parents=True)
+    (d / "01_x.txt").write_text("Materi.", encoding="utf-8")
+
+    def boom(cli, prompt):
+        raise SystemExit("claude not logged in")
+
+    monkeypatch.setattr(g, "run_ai_cli", boom)
+    # must NOT raise, and must NOT write the file
+    g.generate_youtube(sb, tmp_path, force=False)
+    assert not (tmp_path / "youtube" / "id" / "youtube.txt").exists()
+
+
+def test_generate_youtube_skips_when_no_transcript(g, tmp_path, monkeypatch):
+    sb = _sb(g, languages=["id"],
+             scenes=[g.Scene(basename="01_x", classname="X", file="s.py",
+                             fallback_duration=10, description="d", narration={})])
+    called = {"n": 0}
+    monkeypatch.setattr(g, "run_ai_cli", lambda *a, **k: called.__setitem__("n", called["n"] + 1) or "{}")
+    g.generate_youtube(sb, tmp_path, force=False)
+    assert called["n"] == 0
+    assert not (tmp_path / "youtube" / "id" / "youtube.txt").exists()

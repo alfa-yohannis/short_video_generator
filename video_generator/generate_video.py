@@ -925,7 +925,8 @@ def _generate_audio_gemini(sb: Storyboard, output: Path, force: bool,
                     time.sleep(wait)
 
 
-def render_manim(sb: Storyboard, output: Path, lang: str, orient: str, force: bool) -> None:
+def render_manim(sb: Storyboard, output: Path, lang: str, orient: str, force: bool,
+                 check_layout: str = "off") -> None:
     scenes_dir = sb.scenes_landscape_dir if orient == "landscape" else sb.scenes_portrait_dir
     if not scenes_dir.exists():
         raise SystemExit(f"scenes_{orient}_dir does not exist: {scenes_dir}")
@@ -937,6 +938,9 @@ def render_manim(sb: Storyboard, output: Path, lang: str, orient: str, force: bo
     env["MANIM_LANG"] = lang
     env["LANG_CODE"] = lang
     env["MANIM_AUDIO_DIR"] = str((output / "audio").resolve())
+    # The scene _common.py reads this to run its layout self-check (overflow /
+    # clipping / overlap). "strict" makes a violation fail the render.
+    env["MANIM_CHECK_LAYOUT"] = check_layout
     if not MANIM_BIN.exists():
         raise SystemExit(f"manim binary not found at {MANIM_BIN}")
     for sc in sb.scenes:
@@ -1050,6 +1054,182 @@ def merge_srts(sb: Storyboard, output: Path, lang: str) -> Path:
     return out_path
 
 
+# --- YouTube publishing metadata (youtube.txt per language) ---------------
+#
+# Asks the configured AI CLI to write a title/description/keywords block from a
+# language's narration transcript, then sanitises and clamps each field to
+# YouTube's limits. Mirrors the sibling `slides_narrator` project, adapted to
+# this project's bilingual layout: one file per language at
+# <output>/youtube/<lang>/youtube.txt. It's a trailing nice-to-have — a failure
+# here never aborts the build.
+
+YT_TITLE_MAX = 100
+YT_DESC_MAX = 5000
+YT_KEYWORDS_MAX = 500
+
+# Emoji / pictograph ranges to strip (kept narrow so ordinary punctuation like
+# em dash, ellipsis or curly quotes survives).
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001F300-\U0001FAFF"
+    "\U0001F1E6-\U0001F1FF"
+    "\U00002600-\U000026FF"
+    "\U00002700-\U000027BF"
+    "\U00002B00-\U00002BFF"
+    "\U0000FE00-\U0000FE0F"
+    "\U00002190-\U000021FF"
+    "]+",
+    flags=re.UNICODE,
+)
+
+
+def _tidy_ws(text: str) -> str:
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    text = re.sub(r" *\n", "\n", text)
+    return text.strip()
+
+
+def _strip_emoji(text: str) -> str:
+    """Remove emoji/pictographs but keep hashtags and ordinary punctuation."""
+    return _tidy_ws(_EMOJI_RE.sub("", text))
+
+
+def _strip_emoji_hashtags(text: str) -> str:
+    """For the title: strip emoji AND #hashtags (but keep things like 'C#')."""
+    text = _EMOJI_RE.sub("", text)
+    text = re.sub(r"(?<!\S)#\w+", "", text)
+    return _tidy_ws(text)
+
+
+def _cap_hashtags(text: str, max_tags: int = 15) -> str:
+    """YouTube ignores ALL hashtags once a description has more than 15, so drop
+    any beyond the 15th rather than risk losing them all."""
+    count = 0
+
+    def repl(m: re.Match) -> str:
+        nonlocal count
+        count += 1
+        return m.group(0) if count <= max_tags else ""
+
+    return _tidy_ws(re.sub(r"(?<!\S)#\w+", repl, text))
+
+
+def _clamp(text: str, limit: int) -> str:
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    sp = cut.rfind(" ")
+    if sp >= limit - 20:  # snap to a word boundary if one is close to the end
+        cut = cut[:sp]
+    return cut.rstrip()
+
+
+def _clamp_keywords(keywords: str, limit: int = YT_KEYWORDS_MAX) -> str:
+    tags = [t.strip() for t in keywords.replace("\n", ",").split(",") if t.strip()]
+    out: List[str] = []
+    total = 0
+    for tag in tags:
+        add = len(tag) + (2 if out else 0)  # account for the ", " joiner
+        if total + add > limit:
+            break
+        out.append(tag)
+        total += add
+    return ", ".join(out)
+
+
+def _extract_json(text: str) -> dict:
+    text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        m = re.search(r"\{.*\}", text, re.DOTALL)
+        if not m:
+            raise
+        return json.loads(m.group(0))
+
+
+def _youtube_prompt(transcript: str, lang: str) -> str:
+    lang_name = {"id": "Indonesian", "en": "English"}.get(lang, lang)
+    return (
+        "You are writing YouTube publishing metadata for a narrated tutorial "
+        f"video. Base it ONLY on the narration transcript below. Write the "
+        f'"title" and "description" in {lang_name}.\n\n'
+        'Return ONE JSON object with exactly these keys: "title", "description", '
+        '"keywords".\n'
+        "- title: at most 100 characters; put the most important, searchable "
+        "terms in the first ~70 characters; no emoji; NO hashtags.\n"
+        "- description: at most 5000 characters; no emoji. Start with a strong "
+        "hook in the first ~157 characters, then a short overview and a bulleted "
+        'list (plain "- " lines) of what the video covers. END with one final '
+        "line of 5 to 10 relevant hashtags as single words with no spaces "
+        "(e.g. #Pythagoras #Mathematics). Use at most 15 hashtags, and put "
+        "hashtags ONLY here in the description, never in the title.\n"
+        "- keywords: a comma-separated list of plain tags (NO '#'); total length "
+        "at most 500 characters; each tag at most 30 characters; mix "
+        f"{lang_name} and English technical terms.\n\n"
+        "Output ONLY the JSON object. No code fence, no commentary.\n\n"
+        "Transcript:\n" + transcript
+    )
+
+
+def _youtube_text(title: str, description: str, keywords: str) -> str:
+    return (
+        f"TITLE\n{title.strip()}\n\n"
+        f"DESCRIPTION\n{description.strip()}\n\n"
+        f"KEYWORDS\n{keywords.strip()}\n"
+    )
+
+
+def _read_transcript(sb: Storyboard, output: Path, lang: str) -> str:
+    """Concatenate a language's per-scene narration scripts in scene order."""
+    parts = []
+    for sc in sb.scenes:
+        p = output / "scripts" / lang / f"{sc.basename}.txt"
+        if p.exists():
+            t = p.read_text(encoding="utf-8").strip()
+            if t:
+                parts.append(t)
+        elif sc.narration.get(lang, "").strip():
+            parts.append(sc.narration[lang].strip())
+    return "\n\n".join(parts)
+
+
+def generate_youtube(sb: Storyboard, output: Path, force: bool) -> None:
+    """Write <output>/youtube/<lang>/youtube.txt for each language. Never raises
+    on AI/parse failure — the video itself is unaffected."""
+    for lang in sb.languages:
+        out_path = output / "youtube" / lang / "youtube.txt"
+        if out_path.exists() and not force:
+            print(f"  youtube/{lang}/youtube.txt exists — skipping (use --force)")
+            continue
+        transcript = _read_transcript(sb, output, lang)
+        if not transcript:
+            print(f"  no narration for {lang} — skipping youtube.txt")
+            continue
+        try:
+            raw = run_ai_cli(sb.ai_cli, _youtube_prompt(transcript, lang))
+            meta = _extract_json(raw)
+        except (SystemExit, RuntimeError, json.JSONDecodeError, OSError) as e:
+            print(f"  youtube metadata for {lang} failed ({type(e).__name__}: {e}); "
+                  "skipping. The video itself is unaffected.")
+            continue
+        title = _clamp(_strip_emoji_hashtags(str(meta.get("title", ""))), YT_TITLE_MAX)
+        # Description keeps hashtags (emoji stripped, capped at 15 so YouTube honours them).
+        desc = _clamp(_cap_hashtags(_strip_emoji(str(meta.get("description", "")))), YT_DESC_MAX)
+        keywords = _clamp_keywords(str(meta.get("keywords", "")), YT_KEYWORDS_MAX)
+        if not title or not desc:
+            print(f"  AI returned empty title/description for {lang}; skipping youtube.txt")
+            continue
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(_youtube_text(title, desc, keywords), encoding="utf-8")
+        print(f"  -> {out_path} (title {len(title)}/{YT_TITLE_MAX}, "
+              f"desc {len(desc)}/{YT_DESC_MAX}, keywords {len(keywords)}/{YT_KEYWORDS_MAX})")
+
+
 # --- CLI ------------------------------------------------------------------
 
 
@@ -1085,6 +1265,7 @@ _WIPE_SUBDIRS = (
     "scenes_portrait",
     "manim_media",
     "assets",
+    "youtube",
 )
 
 
@@ -1160,41 +1341,45 @@ def cmd_build(args: argparse.Namespace) -> None:
             raise SystemExit(f"No scenes matched --only filter: {args.only}")
 
     if args.stage in ("all", "scripts"):
-        print("[1/7] write narration scripts (AI-generated when missing)")
+        print("[1/8] write narration scripts (AI-generated when missing)")
         write_narration_scripts(sb, output)
     if args.stage in ("all", "audio"):
-        print("[2/7] generate audio + per-scene SRTs")
+        print("[2/8] generate audio + per-scene SRTs")
         # Make sure narration is populated even if --stage audio is run alone.
         for sc in sb.scenes:
             for lang in sb.languages:
                 ensure_narration(sb, sc, lang, output=output)
         generate_audio(sb, output, args.force)
     if args.stage in ("all", "scenes"):
-        print("[3/7] materialize scene .py files (AI-generated when missing)")
+        print("[3/8] materialize scene .py files (AI-generated when missing)")
         ensure_scene_files(sb, output, args.force)
     if args.stage in ("all", "render"):
-        print("[4/7] render Manim scenes")
+        print("[4/8] render Manim scenes")
         # Render assumes scene .py files exist; populate dirs from defaults.
         ensure_scene_files(sb, output, force=False)
         for lang in sb.languages:
             for orient in sb.orientations:
-                render_manim(sb, output, lang, orient, args.force)
+                render_manim(sb, output, lang, orient, args.force,
+                             check_layout=args.check_layout)
     if args.stage in ("all", "mux"):
-        print("[5/7] mux clips (video + audio)")
+        print("[5/8] mux clips (video + audio)")
         for lang in sb.languages:
             for orient in sb.orientations:
                 mux_clips(sb, output, lang, orient, args.force)
     if args.stage in ("all", "concat"):
-        print("[6/7] concat per-scene clips into final videos")
+        print("[6/8] concat per-scene clips into final videos")
         for lang in sb.languages:
             for orient in sb.orientations:
                 final = concat_final(sb, output, lang, orient)
                 print(f"  -> {final}")
     if args.stage in ("all", "srt"):
-        print("[7/7] merge per-scene SRTs into final SRTs")
+        print("[7/8] merge per-scene SRTs into final SRTs")
         for lang in sb.languages:
             merged = merge_srts(sb, output, lang)
             print(f"  -> {merged}")
+    if args.stage in ("all", "youtube") and not args.skip_youtube:
+        print("[8/8] generate YouTube metadata (per language)")
+        generate_youtube(sb, output, args.force)
     print("\nDone.")
 
 
@@ -1206,7 +1391,7 @@ def main() -> None:
     ap.add_argument("--output", required=True, help="Output directory (all intermediates go here)")
     ap.add_argument(
         "--stage",
-        choices=["all", "scripts", "audio", "scenes", "render", "mux", "concat", "srt"],
+        choices=["all", "scripts", "audio", "scenes", "render", "mux", "concat", "srt", "youtube"],
         default="all",
         help="Run only one stage of the pipeline (default: all)",
     )
@@ -1237,6 +1422,16 @@ def main() -> None:
         "--gemini-api-key", default=None,
         help="Gemini API key. Defaults to $GEMINI_API_KEY, then a .env at the "
              "repo root, then 'gemini_api_key:' in the storyboard front-matter.",
+    )
+    ap.add_argument(
+        "--check-layout", choices=["off", "warn", "strict"], default="off",
+        help="At render time, check each scene's text for off-frame overflow / "
+             "clipping, portrait caption-zone violations, and text overlap. "
+             "'warn' logs issues; 'strict' fails the render (default: off).",
+    )
+    ap.add_argument(
+        "--skip-youtube", action="store_true",
+        help="Don't generate youtube/<lang>/youtube.txt (title/description/keywords)",
     )
     ap.add_argument(
         "--skip-dep-check", action="store_true",

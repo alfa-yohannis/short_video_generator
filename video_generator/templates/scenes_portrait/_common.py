@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -67,10 +68,6 @@ SHORTS_SAFE_WIDTH = config.frame_width - 0.6
 # --- Font registration ----------------------------------------------------
 _FONT_DIR = ROOT_DIR / "assets" / "fonts"
 for _ttf in [
-    "NotoSansMono-Regular.ttf",
-    "NotoSansMono-Medium.ttf",
-    "NotoSansMono-SemiBold.ttf",
-    "NotoSansMono-Bold.ttf",
     "NotoSans-Regular.ttf",
     "NotoSans-Medium.ttf",
     "NotoSans-SemiBold.ttf",
@@ -81,8 +78,7 @@ for _ttf in [
     manimpango.register_font(str(_FONT_DIR / _ttf))
 
 # Non-code text (titles, body, subtitles) uses the proportional Noto Sans for
-# even, kerned spacing. Code samples use JetBrains Mono NL. Noto Sans Mono stays
-# registered so scenes can opt into a monospace look via font="Noto Sans Mono".
+# even, kerned spacing. Code samples use JetBrains Mono NL.
 BODY_FONT = "Noto Sans"
 CODE_FONT = "JetBrains Mono NL"
 
@@ -110,6 +106,127 @@ def _patched_markup_init(self, *args, font=None, **kwargs):
 
 Text.__init__ = _patched_text_init
 MarkupText.__init__ = _patched_markup_init
+
+
+# --- Layout self-check (overflow / clipping / overlap) --------------------
+# Opt-in via the MANIM_CHECK_LAYOUT env var, which the generator sets from its
+# --check-layout flag:
+#   unset / "off" (default) → no check, render behaves exactly as before
+#   "warn"                  → print any violations to stderr, keep rendering
+#   "strict"                → raise LayoutError, which fails the render
+# The check targets visible text mobjects (Text / MarkupText) — the place where
+# AI-generated scenes overflow the frame or collide. It runs automatically at
+# the end of every Scene.render (no per-scene cooperation needed).
+
+class LayoutError(Exception):
+    """Raised in strict mode when a scene's text leaves the frame or overlaps."""
+
+
+def _layout_mode(explicit=None):
+    return (explicit or os.environ.get("MANIM_CHECK_LAYOUT", "off")).strip().lower()
+
+
+def _bbox(m):
+    """(x_min, x_max, y_min, y_max) of a mobject in Manim units."""
+    return (m.get_left()[0], m.get_right()[0], m.get_bottom()[1], m.get_top()[1])
+
+
+def _overlap_area(a, b):
+    ix = max(0.0, min(a[1], b[1]) - max(a[0], b[0]))
+    iy = max(0.0, min(a[3], b[3]) - max(a[2], b[2]))
+    return ix * iy
+
+
+def _text_mobjects(scene):
+    out, ids = [], set()
+    for top in scene.mobjects:
+        for m in top.get_family():
+            if isinstance(m, (Text, MarkupText)) and id(m) not in ids:
+                if m.width > 1e-3 and m.height > 1e-3:
+                    ids.add(id(m))
+                    out.append(m)
+    return out
+
+
+def _text_label(m):
+    try:
+        t = m.text
+    except Exception:
+        t = m.__class__.__name__
+    return (t or m.__class__.__name__).strip().replace("\n", " ")[:48]
+
+
+def check_layout(scene, mode=None, overlap_frac=0.5, eps=0.05):
+    """Inspect a rendered scene's text for off-frame overflow, portrait
+    safe-area violations, and significant text-text overlap. Returns the list of
+    issue strings; logs them in warn/strict mode and raises in strict mode."""
+    mode = _layout_mode(mode)
+    if mode in ("", "0", "off", "false", "no", "none"):
+        return []
+
+    fw, fh = config.frame_width, config.frame_height
+    texts = _text_mobjects(scene)
+    issues = []
+
+    # 1. Off-frame overflow / clipping.
+    for m in texts:
+        x0, x1, y0, y1 = _bbox(m)
+        if x0 < -fw / 2 - eps or x1 > fw / 2 + eps or y0 < -fh / 2 - eps or y1 > fh / 2 + eps:
+            issues.append(
+                f"OVERFLOW: {_text_label(m)!r} extends past the frame "
+                f"(x[{x0:.2f},{x1:.2f}] y[{y0:.2f},{y1:.2f}], frame {fw:.1f}x{fh:.1f})"
+            )
+
+    # 2. Portrait caption-reserved zone (only where SHORTS_SAFE_BOTTOM exists).
+    safe_bottom = globals().get("SHORTS_SAFE_BOTTOM")
+    if safe_bottom is not None:
+        for m in texts:
+            y0 = _bbox(m)[2]
+            if y0 < safe_bottom - eps:
+                issues.append(
+                    f"SAFE-AREA: {_text_label(m)!r} dips below SHORTS_SAFE_BOTTOM "
+                    f"({y0:.2f} < {safe_bottom:.2f}; the bottom 2/10 is reserved "
+                    "for Reels/Shorts/TikTok captions)"
+                )
+
+    # 3. Significant text-text overlap (ignores ancestor/descendant pairs).
+    boxes = [(_bbox(m), m) for m in texts]
+    for i in range(len(boxes)):
+        bi, mi = boxes[i]
+        area_i = (bi[1] - bi[0]) * (bi[3] - bi[2])
+        for j in range(i + 1, len(boxes)):
+            bj, mj = boxes[j]
+            if mi in mj.get_family() or mj in mi.get_family():
+                continue
+            area_j = (bj[1] - bj[0]) * (bj[3] - bj[2])
+            smaller = min(area_i, area_j)
+            ov = _overlap_area(bi, bj)
+            if smaller > 1e-6 and ov > overlap_frac * smaller:
+                issues.append(
+                    f"OVERLAP: {_text_label(mi)!r} and {_text_label(mj)!r} overlap "
+                    f"({ov / smaller * 100:.0f}% of the smaller box)"
+                )
+
+    if issues:
+        header = f"[layout] {len(issues)} issue(s) in {type(scene).__name__}:"
+        print(header, file=sys.stderr)
+        for s in issues:
+            print(f"  - {s}", file=sys.stderr)
+        if mode == "strict":
+            raise LayoutError(header + " " + "; ".join(issues))
+    return issues
+
+
+_orig_scene_render = Scene.render
+
+
+def _patched_scene_render(self, *args, **kwargs):
+    result = _orig_scene_render(self, *args, **kwargs)
+    check_layout(self)
+    return result
+
+
+Scene.render = _patched_scene_render
 
 
 # --- Typography helpers (slightly bigger for portrait) -------------------
@@ -200,7 +317,7 @@ def node_label(text: str, color=PRIMARY, width: float = 4.8,
     return VGroup(box, label)
 
 
-def title_bar(text: str) -> VGroup:
+def title_bar(text: str, eyebrow: str = "") -> VGroup:
     bar = Rectangle(
         width=config.frame_width,
         height=1.18,
@@ -219,11 +336,14 @@ def title_bar(text: str) -> VGroup:
                             fill_color=ACCENT, fill_opacity=1.0,
                             stroke_opacity=0).align_to(bar, LEFT)
     left_accent.move_to([left_accent.get_center()[0], bar.get_center()[1], 0])
-    tag = MarkupText("DESIGN PATTERN", font_size=18, weight=W_SEMIBOLD,
-                     color=HIGHLIGHT)
     title = MarkupText(text, font_size=39, weight=W_SEMIBOLD,
                        color=WHITE)
-    label = VGroup(tag, title).arrange(DOWN, aligned_edge=LEFT, buff=0.04)
+    if eyebrow:
+        tag = MarkupText(eyebrow, font_size=18, weight=W_SEMIBOLD,
+                         color=HIGHLIGHT)
+        label = VGroup(tag, title).arrange(DOWN, aligned_edge=LEFT, buff=0.04)
+    else:
+        label = VGroup(title)
     label.move_to(bar.get_center()).align_to(bar, LEFT).shift(RIGHT * 0.45)
     if label.width > config.frame_width - 0.9:
         label.scale((config.frame_width - 0.9) / label.width)
