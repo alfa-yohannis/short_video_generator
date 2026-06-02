@@ -100,15 +100,29 @@ Text.__init__ = _patched_text_init
 MarkupText.__init__ = _patched_markup_init
 
 
-# --- Layout self-check (overflow / clipping / overlap) --------------------
+# --- Layout self-check & auto-fix -----------------------------------------
 # Opt-in via the MANIM_CHECK_LAYOUT env var, which the generator sets from its
 # --check-layout flag:
 #   unset / "off" (default) → no check, render behaves exactly as before
 #   "warn"                  → print any violations to stderr, keep rendering
-#   "strict"                → raise LayoutError, which fails the render
-# The check targets visible text mobjects (Text / MarkupText) — the place where
-# AI-generated scenes overflow the frame or collide. It runs automatically at
-# the end of every Scene.render (no per-scene cooperation needed).
+#   "strict"                → raise LayoutError (fails the render → AI re-repair)
+#   "fit"                   → auto-correct the geometric ones in-render (below)
+#
+# THINGS CHECKED AND FIXED (single source of truth; keep README in sync):
+#   1. OVERFLOW    text/blocks past the frame edge (clipping)
+#                    detect: yes   auto-fix(fit): yes  (scale + nudge inside;
+#                    applied to entering elements too, so a clipped item is
+#                    corrected before its first frame — never a visible "pop")
+#   2. SAFE-AREA   content below SHORTS_SAFE_BOTTOM (portrait caption zone)
+#                    detect: yes   auto-fix(fit): yes  (lift above the line)
+#   3. CONTAINMENT text/code spilling outside its own panel/box
+#                    detect: —     auto-fix(fit): yes  (shrink content to panel)
+#   4. OVERLAP     text-vs-text and block-vs-block collisions
+#                    detect: yes   auto-fix(fit): no   (fix via strict + AI repair)
+# Semantic problems (e.g. an arrow pointing the wrong way) are intentionally NOT
+# auto-checked here — geometry can't know intent; those are fixed at authoring /
+# AI-generation time. Detection runs after every play AND at end of render, so
+# transient mid-scene violations are caught, not just the final frame.
 
 class LayoutError(Exception):
     """Raised in strict mode when a scene's text leaves the frame or overlaps."""
@@ -148,14 +162,28 @@ def _text_label(m):
     return (t or m.__class__.__name__).strip().replace("\n", " ")[:48]
 
 
-def check_layout(scene, mode=None, overlap_frac=0.5, eps=0.05):
-    """Inspect a rendered scene's text for off-frame overflow, portrait
-    safe-area violations, and significant text-text overlap. Returns the list of
-    issue strings; logs them in warn/strict mode and raises in strict mode."""
-    mode = _layout_mode(mode)
-    if mode in ("", "0", "off", "false", "no", "none"):
-        return []
+def _content_units(scene):
+    """Top-level mobjects that carry visible text and aren't full-bleed bars /
+    backgrounds — i.e. the cards, panels, callouts and labels a viewer reads as
+    distinct blocks. Used for block-vs-block overlap (a box drawn over code, a
+    stray label over a card) that text-vs-text comparison alone misses."""
+    fw, fh = config.frame_width, config.frame_height
+    out = []
+    for top in scene.mobjects:
+        if not _has_text(top):
+            continue
+        w, h = top.width, top.height
+        if w <= 1e-3 or h <= 1e-3:
+            continue
+        if w >= 0.97 * fw or h >= 0.97 * fh:   # full-bleed bar / background
+            continue
+        out.append(top)
+    return out
 
+
+def _detect_layout_issues(scene, overlap_frac=0.5, eps=0.05):
+    """Pure detector: return the list of layout-violation strings (no logging,
+    no raising). Shared by the end-of-render check and the during-render pass."""
     fw, fh = config.frame_width, config.frame_height
     texts = _text_mobjects(scene)
     issues = []
@@ -199,14 +227,75 @@ def check_layout(scene, mode=None, overlap_frac=0.5, eps=0.05):
                     f"({ov / smaller * 100:.0f}% of the smaller box)"
                 )
 
-    if issues:
-        header = f"[layout] {len(issues)} issue(s) in {type(scene).__name__}:"
-        print(header, file=sys.stderr)
-        for s in issues:
-            print(f"  - {s}", file=sys.stderr)
-        if mode == "strict":
-            raise LayoutError(header + " " + "; ".join(issues))
+    # 4. Block-vs-block overlap: two distinct content groups (a card, a panel,
+    #    a callout) whose bounding boxes collide — e.g. a summary box drawn over
+    #    a code card, or a stray label over a panel.
+    units = [(_bbox(u), u) for u in _content_units(scene)]
+    for i in range(len(units)):
+        bi, ui = units[i]
+        area_i = (bi[1] - bi[0]) * (bi[3] - bi[2])
+        for j in range(i + 1, len(units)):
+            bj, uj = units[j]
+            if ui in uj.get_family() or uj in ui.get_family():
+                continue
+            area_j = (bj[1] - bj[0]) * (bj[3] - bj[2])
+            smaller = min(area_i, area_j)
+            ov = _overlap_area(bi, bj)
+            if smaller > 1e-6 and ov > overlap_frac * smaller:
+                issues.append(
+                    f"OVERLAP: block {_text_label(ui)!r} and block {_text_label(uj)!r} "
+                    f"overlap ({ov / smaller * 100:.0f}% of the smaller block)"
+                )
+
     return issues
+
+
+def _report_layout(scene, issues, mode, seen=None):
+    """Log new issues to stderr; raise LayoutError in strict mode. When `seen`
+    is given, only issues not already in it are reported (used to de-dupe the
+    repeated during-render passes)."""
+    new = []
+    for s in issues:
+        if seen is not None:
+            if s in seen:
+                continue
+            seen.add(s)
+        new.append(s)
+    if not new:
+        return new
+    header = f"[layout] {len(new)} issue(s) in {type(scene).__name__}:"
+    print(header, file=sys.stderr)
+    for s in new:
+        print(f"  - {s}", file=sys.stderr)
+    if mode == "strict":
+        raise LayoutError(header + " " + "; ".join(new))
+    return new
+
+
+def check_layout(scene, mode=None, overlap_frac=0.5, eps=0.05):
+    """Inspect a scene's text/blocks for off-frame overflow, portrait safe-area
+    violations, and significant overlap. Returns the issue strings; logs them in
+    warn/strict mode and raises in strict mode."""
+    mode = _layout_mode(mode)
+    if mode in ("", "0", "off", "false", "no", "none"):
+        return []
+    issues = _detect_layout_issues(scene, overlap_frac, eps)
+    _report_layout(scene, issues, mode)
+    return issues
+
+
+def _check_during_render(scene):
+    """Run the detector after each play in warn/strict mode so mid-scene
+    violations (a callout that later fades out, a transient overlap) are caught
+    too — not just whatever survives to the final frame. De-duped per scene."""
+    mode = _layout_mode()
+    if mode not in ("warn", "strict"):
+        return
+    seen = getattr(scene, "_layout_seen", None)
+    if seen is None:
+        seen = set()
+        scene._layout_seen = seen
+    _report_layout(scene, _detect_layout_issues(scene), mode, seen=seen)
 
 
 # --- Auto-fit (opt-in via MANIM_CHECK_LAYOUT=fit) -------------------------
@@ -218,16 +307,100 @@ def check_layout(scene, mode=None, overlap_frac=0.5, eps=0.05):
 # so the correction is baked into the output — unlike the end-of-render check,
 # which fires too late to change what was already drawn.
 
-def _fit_text_mobject(m, eps=0.08):
-    """Scale + translate one text mobject so its bounding box sits inside the
-    frame and above SHORTS_SAFE_BOTTOM (when defined). Returns True if changed."""
+def _box_dims_ok(m):
+    """True for a rectangle-ish panel we may shrink content into — not a
+    full-bleed background/title bar and not a hairline accent strip."""
     fw, fh = config.frame_width, config.frame_height
+    fam = m.get_family()
+    has_rect = any(isinstance(x, (Rectangle, RoundedRectangle)) for x in fam)
+    has_text = any(isinstance(x, (Text, MarkupText)) for x in fam)
+    if not has_rect or has_text:
+        return False
+    w, h = m.width, m.height
+    if w < 0.4 or h < 0.4:
+        return False
+    if w >= 0.97 * fw or h >= 0.97 * fh:   # full-bleed bar / background
+        return False
+    return True
+
+
+def _has_text(m):
+    return any(isinstance(x, (Text, MarkupText)) and x.width > 1e-3 and x.height > 1e-3
+               for x in m.get_family())
+
+
+def _fit_content_in_box(content, box, pad=0.14):
+    """Scale a content group down as a whole (so internal alignment survives)
+    and recenter it on `box` — but only when it actually overflows the box and
+    the shrink is modest. A drastic shrink means `box` isn't really this
+    content's container (e.g. a thin highlight rectangle laid over it), so we
+    leave it for the AI-repair path rather than squashing it to nothing."""
+    bx0, bx1, by0, by1 = _bbox(box)
+    avail_w = (bx1 - bx0) - 2 * pad
+    avail_h = (by1 - by0) - 2 * pad
+    if avail_w <= 0.1 or avail_h <= 0.1:
+        return False
+    cw, ch = content.width, content.height
+    if cw <= 1e-6 or ch <= 1e-6 or (cw <= avail_w and ch <= avail_h):
+        return False
+    factor = min(avail_w / cw, avail_h / ch, 1.0)
+    if factor < 0.5:          # too aggressive — `box` isn't a real container
+        return False
+    content.scale(factor)
+    content.move_to(box.get_center())
+    return True
+
+
+def _autofit_boxes(roots):
+    """Keep panel contents inside their panel: for each parent, match a content
+    child to its smallest *plausible* enclosing sibling box and shrink it to
+    fit. Matches the `VGroup(panel, content)` idiom AI-generated scenes use. A
+    box only counts as a container when it's comparable to / bigger than the
+    content — so a thin highlight / SurroundingRectangle laid over a card never
+    causes the whole card to be squashed into it."""
+    def process(children):
+        boxes = [k for k in children if _box_dims_ok(k)]
+        if boxes:
+            for c in children:
+                if c in boxes or not _has_text(c):
+                    continue
+                bc = _bbox(c)
+                c_area = (bc[1] - bc[0]) * (bc[3] - bc[2])
+                cx, cy = c.get_center()[0], c.get_center()[1]
+                best, best_area = None, None
+                for b in boxes:
+                    if b is c or b in c.get_family() or c in b.get_family():
+                        continue
+                    x0, x1, y0, y1 = _bbox(b)
+                    if not (x0 <= cx <= x1 and y0 <= cy <= y1):
+                        continue
+                    area = (x1 - x0) * (y1 - y0)
+                    if area < 0.6 * c_area:   # too small to be the container
+                        continue
+                    if best_area is None or area < best_area:
+                        best, best_area = b, area
+                if best is not None:
+                    _fit_content_in_box(c, best)
+        for k in children:
+            subs = list(getattr(k, "submobjects", []))
+            if subs:
+                process(subs)
+    process(list(roots))
+
+
+def _fit_into_frame(m, eps=0.08):
+    """Scale + translate one mobject so its bounding box sits inside the frame
+    and above SHORTS_SAFE_BOTTOM (when defined). Skips full-bleed bars /
+    backgrounds. Returns True if changed."""
+    fw, fh = config.frame_width, config.frame_height
+    if m.width <= 1e-6 or m.height <= 1e-6:
+        return False
+    if m.width >= 0.97 * fw or m.height >= 0.97 * fh:  # full-bleed: leave alone
+        return False
     safe_bottom = globals().get("SHORTS_SAFE_BOTTOM")
     left_lim, right_lim = -fw / 2 + eps, fw / 2 - eps
     top_lim = fh / 2 - eps
     bot_lim = (safe_bottom if safe_bottom is not None else -fh / 2) + eps
-    if m.width <= 1e-6 or m.height <= 1e-6:
-        return False
     changed = False
 
     # 1. Shrink to fit the usable width/height band.
@@ -265,16 +438,21 @@ def _animation_mobjects(animations):
 
 
 def _autofit_scene(scene, extra=()):
-    """Fit every visible text mobject currently on (or entering) the scene."""
+    """In fit mode: (1) keep each panel's contents inside the panel, then
+    (2) clamp every top-level content group inside the frame / above the
+    portrait safe area. Runs before each play / wait so the fix is rendered."""
     if _layout_mode() != "fit":
         return
-    seen = set()
-    for top in list(scene.mobjects) + list(extra):
-        for m in top.get_family():
-            if isinstance(m, (Text, MarkupText)) and id(m) not in seen:
-                if m.width > 1e-3 and m.height > 1e-3:
-                    seen.add(id(m))
-                    _fit_text_mobject(m)
+    roots = list(scene.mobjects) + [m for m in extra if m is not None]
+    _autofit_boxes(roots)
+    # Frame-clamp top-level items AND entering animation targets, so a clipped
+    # element is corrected before its intro frame renders (no visible "pop"
+    # where it appears off-frame then jumps in). Skip any item nested inside
+    # another in the set so a group and its child aren't clamped twice.
+    for m in roots:
+        if any(other is not m and m in other.get_family() for other in roots):
+            continue
+        _fit_into_frame(m)
 
 
 _orig_scene_render = Scene.render
@@ -290,12 +468,16 @@ def _patched_scene_render(self, *args, **kwargs):
 
 def _patched_scene_play(self, *animations, **kwargs):
     _autofit_scene(self, extra=_animation_mobjects(animations))
-    return _orig_scene_play(self, *animations, **kwargs)
+    result = _orig_scene_play(self, *animations, **kwargs)
+    _check_during_render(self)
+    return result
 
 
 def _patched_scene_wait(self, *args, **kwargs):
     _autofit_scene(self)
-    return _orig_scene_wait(self, *args, **kwargs)
+    result = _orig_scene_wait(self, *args, **kwargs)
+    _check_during_render(self)
+    return result
 
 
 Scene.render = _patched_scene_render
@@ -369,6 +551,23 @@ def soft_panel(width: float, height: float, stroke=PRIMARY, fill=CARD_BG,
                              fill_opacity=0.55)
     shade.shift(RIGHT * 0.06 + DOWN * 0.06)
     return VGroup(shade, panel)
+
+
+def fit_inside(content: Mobject, box: Mobject, pad: float = 0.25) -> Mobject:
+    """Shrink `content` (never enlarge) so its bounding box fits inside `box`
+    with `pad` units of clearance on every side, then center it on `box`.
+
+    Use this whenever text or a code block is dropped onto a fixed-size
+    `soft_panel(...)` / rectangle: it guarantees the content can't spill past
+    the border (the recurring "text overflows its box" bug)."""
+    avail_w = max(0.1, box.width - 2 * pad)
+    avail_h = max(0.1, box.height - 2 * pad)
+    if content.width > avail_w or content.height > avail_h:
+        factor = min(avail_w / content.width, avail_h / content.height)
+        if 0 < factor < 1:
+            content.scale(factor)
+    content.move_to(box.get_center())
+    return content
 
 
 def node_label(text: str, color=PRIMARY, width: float = 2.6,

@@ -357,15 +357,28 @@ Authenticate either way:
 ## Layout self-check
 
 AI-generated scenes occasionally place text past the frame edge, stack two
-labels on the same spot, or (in portrait) drop content into the caption zone.
-`--check-layout` turns on a render-time guard, implemented in the scene
-`_common.py` and run automatically at the end of every `Scene.render`:
+labels on the same spot, spill text outside its panel, or (in portrait) drop
+content into the caption zone. `--check-layout` turns on a render-time guard,
+implemented in the scene `_common.py`. Detection runs **after every animation
+step and at the end of every `Scene.render`**, so a violation that only exists
+mid-scene (a callout that later fades out) is caught too — not just the final
+frame.
 
-- **OVERFLOW** — a text mobject's bounding box extends past the frame.
-- **SAFE-AREA** (portrait only) — text dips below `SHORTS_SAFE_BOTTOM`, into the
-  bottom 2/10 reserved for Reels/Shorts/TikTok captions.
-- **OVERLAP** — two text mobjects overlap by more than half the smaller one's area
-  (ancestor/descendant pairs are ignored).
+**Things checked and fixed** (the code is the source of truth — see the
+"Layout self-check & auto-fix" block in each `_common.py`; keep this table in
+sync with it):
+
+| # | Check | What it flags | Detected | Auto-fixed in `fit` |
+|---|-------|---------------|----------|---------------------|
+| 1 | **OVERFLOW** | a text/block bounding box extends past the frame edge (clipping) | ✅ | ✅ scale down + nudge inside — applied to *entering* elements too, so a clipped item is corrected before its first frame (never a visible "pop") |
+| 2 | **SAFE-AREA** (portrait) | content dips below `SHORTS_SAFE_BOTTOM` (bottom 2/10 reserved for captions) | ✅ | ✅ lift above the line |
+| 3 | **CONTAINMENT** | text/code spills outside its own panel/box | — | ✅ shrink content to its panel |
+| 4 | **OVERLAP** | two text mobjects **or** two content blocks (card/panel/callout) overlap by more than half the smaller one's area (ancestor/descendant pairs ignored) | ✅ | ❌ fixed via `strict` + AI repair |
+
+Not auto-checked: **semantic** problems such as an arrow pointing the wrong
+direction. Geometry can't know the intended direction, so those are fixed at
+authoring / AI-generation time (the scene prompt steers toward auto-orienting
+arrows), or via the `strict` + AI re-repair loop, which regenerates the scene.
 
 ```bash
 # Log issues but keep rendering:
@@ -379,9 +392,11 @@ python3 video_generator/generate_video.py --storyboard SB.md --output OUT --chec
 ```
 
 The generator passes the mode to Manim via the `MANIM_CHECK_LAYOUT` env var, so
-a direct `manim` invocation honors it too. The check targets **text**
-(`Text` / `MarkupText`) — the usual culprit — not decorative shapes, which keeps
-false positives low. Default is `off`, so it never changes a normal render.
+a direct `manim` invocation honors it too. Overflow/safe-area target **text**
+(`Text` / `MarkupText`) — the usual culprit — while overlap and the `fit`
+clamps also consider **content blocks** (cards, panels, callouts); full-bleed
+bars and backgrounds are excluded to keep false positives low. Default is
+`off`, so it never changes a normal render.
 
 ### Automated fixing
 
@@ -390,11 +405,14 @@ instead of just a report:
 
 - **`fit` (deterministic, in-render).** Because the end-of-render check fires
   *after* a scene's frames are already drawn, `fit` instead hooks every
-  `self.play` / `self.wait` and, just before those frames render, shrinks any
-  too-large text and translates clipped text back inside the frame (and, in
-  portrait, above `SHORTS_SAFE_BOTTOM`). Geometry only — no AI, no extra render
-  passes — so it's fast, but it can change a label's size or position from what
-  the scene intended.
+  `self.play` / `self.wait` and, just before those frames render: shrinks panel
+  contents that overflow their box (CONTAINMENT), then scales/nudges any
+  too-large or clipped text **or content block** back inside the frame and,
+  in portrait, above `SHORTS_SAFE_BOTTOM`. Geometry only — no AI, no extra
+  render passes — so it's fast, but it can change a label's size or position
+  from what the scene intended. It does **not** resolve OVERLAP (moving
+  overlapping blocks apart safely needs to understand intent — that's the AI
+  repair path's job).
 - **AI re-repair loop (with `strict`).** When `--check-layout strict` aborts a
   scene, the generator feeds that scene's source **and the exact violations**
   back to the AI CLI, writes the corrected `.py`, and re-renders — up to
