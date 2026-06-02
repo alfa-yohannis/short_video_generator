@@ -221,6 +221,7 @@ gemini_model: gemini-2.5-flash-preview-tts   # optional; only used for gemini
 ai_cli: claude                # claude | codex  (CLI --ai-cli overrides this)
 fps: 30
 resolution_landscape: [1920, 1080]
+max_duration: 3 minutes      # optional total-video cap (also '180', '2:30', '90s')
 # scenes_landscape_dir / scenes_portrait_dir are optional — when omitted,
 # the generator creates fresh ones under <output>/scenes_<orient>/.
 ---
@@ -243,6 +244,16 @@ override defaults. Subsections like `### description`, `### narration.id`,
 `### narration.en`, `### notes` are all read in. If `narration.<lang>` is absent,
 the AI CLI writes it. If a scene's `.py` file is absent, the AI CLI generates it
 from the description + narration + embedded `_common.py` helpers.
+
+### Limiting total duration
+
+Set `max_duration` in the front-matter (e.g. `3 minutes`, `180`, `2:30`, `90s`)
+to cap the whole video. It's checked at **parse time**: the generator sums every
+scene's `fallback_duration` (which sets each scene's narration word budget, so it
+tracks the final runtime) and refuses to build if the total exceeds the cap —
+before any AI, TTS, or render cost. `max_scene_duration` is accepted as an alias
+and still means the whole-video total. To fit the cap, trim the per-scene
+`fallback_duration` values until they sum to ≤ your limit.
 
 ### Bringing your own Manim sources
 

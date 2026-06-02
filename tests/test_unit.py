@@ -150,6 +150,78 @@ def test_parse_storyboard_resolves_scene_dirs_relative(g, tmp_path):
     assert sb.scenes_portrait_dir is None
 
 
+# --- duration spec + max-duration budget -----------------------------------
+
+
+@pytest.mark.parametrize("value,expected", [
+    (180, 180.0),
+    (90.5, 90.5),
+    ("180", 180.0),
+    ("3 minutes", 180.0),
+    ("3 min", 180.0),
+    ("1.5 min", 90.0),
+    ("90s", 90.0),
+    ("45 seconds", 45.0),
+    ("2:30", 150.0),
+    ("1:00:00", 3600.0),
+    (None, None),
+    ("", None),
+])
+def test_parse_duration_spec(g, value, expected):
+    assert g._parse_duration_spec(value) == expected
+
+
+def test_parse_duration_spec_invalid(g):
+    with pytest.raises(SystemExit):
+        g._parse_duration_spec("soon-ish")
+
+
+def _sb_md_with_durations(durations, max_key=None, max_val=None):
+    scenes = [{"basename": f"{i:02d}_s", "classname": f"S{i}",
+               "duration": d, "narration": {"id": "x", "en": "y"}}
+              for i, d in enumerate(durations, start=1)]
+    return scenes
+
+
+def test_max_duration_under_budget_ok(g, tmp_path):
+    p = write_storyboard(
+        tmp_path / "sb.md",
+        scenes=_sb_md_with_durations([60, 60, 50]),  # 170s
+    )
+    # inject the cap into the front-matter (write_storyboard has no param for it)
+    text = p.read_text(encoding="utf-8").replace(
+        "fps: 30", "max_duration: 3 minutes\nfps: 30")
+    p.write_text(text, encoding="utf-8")
+    sb = g.parse_storyboard(p)
+    assert sb.max_duration == 180.0
+
+
+def test_max_duration_over_budget_raises(g, tmp_path):
+    p = write_storyboard(
+        tmp_path / "sb.md",
+        scenes=_sb_md_with_durations([90, 80, 40]),  # 210s > 180
+    )
+    text = p.read_text(encoding="utf-8").replace(
+        "fps: 30", "max_duration: 3 minutes\nfps: 30")
+    p.write_text(text, encoding="utf-8")
+    with pytest.raises(SystemExit) as ei:
+        g.parse_storyboard(p)
+    assert "max_duration" in str(ei.value) and "210" in str(ei.value)
+
+
+def test_max_scene_duration_alias_is_total_cap(g, tmp_path):
+    # The alias key behaves as the whole-video cap too.
+    p = write_storyboard(
+        tmp_path / "sb.md",
+        scenes=_sb_md_with_durations([100, 100]),  # 200s > 180
+    )
+    text = p.read_text(encoding="utf-8").replace(
+        "fps: 30", "max_scene_duration: 3 minutes\nfps: 30")
+    p.write_text(text, encoding="utf-8")
+    with pytest.raises(SystemExit):
+        g.parse_storyboard(p)
+
+
 # --- voice resolution ------------------------------------------------------
 
 
@@ -509,6 +581,71 @@ def test_gemini_synth_no_audio_raises(g, monkeypatch):
                         lambda req, timeout=None: _FakeResp(json.dumps({"candidates": []}).encode()))
     with pytest.raises(RuntimeError):
         g._gemini_synth("hi", "key", "model", "Iapetus", 30.0)
+
+
+# --- Gemini 429 quota handling ---------------------------------------------
+
+_DAILY_429 = json.dumps({"error": {
+    "code": 429,
+    "message": ("You exceeded your current quota. Quota exceeded for metric: "
+                "generativelanguage.googleapis.com/generate_requests_per_model_per_day, "
+                "limit: 100"),
+}})
+
+
+def test_is_daily_quota_detects_per_day(g):
+    assert g._is_daily_quota(_DAILY_429) is True
+    assert g._is_daily_quota('{"error":{"message":"per_model_per_day"}}') is True
+    assert g._is_daily_quota('{"error":{"message":"requests per minute"}}') is False
+
+
+def test_gemini_error_message_extracts_message(g):
+    assert "exceeded your current quota" in g._gemini_error_message(_DAILY_429)
+    assert g._gemini_error_message("not json at all <html>") == "not json at all <html>"
+
+
+def test_gemini_synth_daily_quota_raises_quota_error(g, monkeypatch):
+    def boom(req, timeout=None):
+        raise g.urllib.error.HTTPError("url", 429, "Too Many Requests", {},
+                                       io.BytesIO(_DAILY_429.encode()))
+
+    monkeypatch.setattr(g.urllib.request, "urlopen", boom)
+    with pytest.raises(g.GeminiQuotaError):
+        g._gemini_synth("hi", "key", "model", "Iapetus", 30.0)
+
+
+def test_gemini_synth_other_429_is_plain_runtimeerror(g, monkeypatch):
+    body = json.dumps({"error": {"code": 429, "message": "Rate limit: requests per minute"}})
+
+    def boom(req, timeout=None):
+        raise g.urllib.error.HTTPError("url", 429, "Too Many Requests", {},
+                                       io.BytesIO(body.encode()))
+
+    monkeypatch.setattr(g.urllib.request, "urlopen", boom)
+    with pytest.raises(RuntimeError) as ei:
+        g._gemini_synth("hi", "key", "model", "Iapetus", 30.0)
+    assert not isinstance(ei.value, g.GeminiQuotaError)
+    assert "429" in str(ei.value)
+
+
+def test_generate_audio_gemini_quota_fast_fails_without_retry(g, tmp_path, monkeypatch):
+    sb = _sb(g, languages=["id"], tts_provider="gemini", gemini_api_key="key",
+             scenes=[g.Scene(basename="01_x", classname="X", file="s.py",
+                             fallback_duration=10, description="d",
+                             narration={"id": "Halo."})])
+    calls = {"n": 0}
+
+    def quota(*a, **k):
+        calls["n"] += 1
+        raise g.GeminiQuotaError("daily quota exhausted")
+
+    monkeypatch.setattr(g, "_gemini_tts_one", quota)
+    # no sleeping should happen (no retries on a daily quota)
+    monkeypatch.setattr(g.time, "sleep", lambda *_: (_ for _ in ()).throw(AssertionError("slept")))
+    with pytest.raises(SystemExit) as ei:
+        g._generate_audio_gemini(sb, tmp_path, force=False, wait=0.0)
+    assert calls["n"] == 1  # tried once, then bailed
+    assert "--tts edge" in str(ei.value)
 
 
 # --- YouTube metadata helpers ----------------------------------------------

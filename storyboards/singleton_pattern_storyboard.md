@@ -4,11 +4,12 @@ languages: [id, en]
 orientations: [landscape, portrait]
 voices:
   id: id-ID-ArdiNeural
-  en: en-US-GuyNeural
+  en: en-US-AndrewNeural
 tts_provider: edge          # edge | gemini
 ai_cli: claude              # claude | codex
 fps: 30
 resolution_landscape: [1920, 1080]
+max_scene_duration: 3 minutes
 ---
 
 # Singleton Pattern — Bilingual Tutorial

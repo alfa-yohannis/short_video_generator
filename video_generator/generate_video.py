@@ -284,9 +284,50 @@ class Storyboard:
     scenes_portrait_dir: "Path | None"
     scenes: List[Scene]
     project_brief: str
+    max_duration: "float | None" = None  # total video cap in seconds, or None
 
 
 # --- Markdown parser ------------------------------------------------------
+
+
+_DURATION_SPEC_RE = re.compile(
+    r"^\s*([0-9]*\.?[0-9]+)\s*"
+    r"(h(?:ours?|rs?)?|m(?:in(?:ute)?s?)?|s(?:ec(?:ond)?s?)?)?\s*$",
+    re.I,
+)
+
+
+def _parse_duration_spec(value) -> "float | None":
+    """Parse a duration into seconds. Accepts a number (seconds), a unit string
+    like '3 minutes' / '90s' / '1.5 min', or a clock form 'M:SS' / 'H:MM:SS'."""
+    if value is None:
+        return None
+    if isinstance(value, bool):  # guard: bool is an int subclass
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    s = str(value).strip()
+    if not s:
+        return None
+    if ":" in s:
+        try:
+            nums = [float(p) for p in s.split(":")]
+        except ValueError:
+            raise SystemExit(f"Invalid duration '{value}'. Use seconds, '3 minutes', or 'M:SS'.")
+        total = 0.0
+        for n in nums:
+            total = total * 60 + n
+        return total
+    m = _DURATION_SPEC_RE.match(s)
+    if not m:
+        raise SystemExit(f"Invalid duration '{value}'. Use seconds, '3 minutes', or 'M:SS'.")
+    num = float(m.group(1))
+    unit = (m.group(2) or "s").lower()
+    if unit.startswith("h"):
+        return num * 3600
+    if unit.startswith("m"):
+        return num * 60
+    return num
 
 
 _FRONT_MATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.S)
@@ -388,6 +429,22 @@ def parse_storyboard(path: Path) -> Storyboard:
     scenes_landscape_dir = (base / raw_landscape).resolve() if raw_landscape else None
     scenes_portrait_dir = (base / raw_portrait).resolve() if raw_portrait else None
 
+    # Total video duration cap. `max_duration` is the canonical key; we also
+    # accept `max_scene_duration` as an alias (it's still the whole-video cap).
+    max_duration = _parse_duration_spec(
+        config.get("max_duration", config.get("max_scene_duration"))
+    )
+    if max_duration is not None:
+        budget = sum(sc.fallback_duration for sc in scenes)
+        if budget > max_duration + 1e-6:
+            raise SystemExit(
+                f"Storyboard duration budget is {budget:.0f}s but max_duration is "
+                f"{max_duration:.0f}s. The video length tracks the sum of each "
+                f"scene's fallback_duration (it sets the narration word budget), so "
+                f"trim those values until they sum to <= {max_duration:.0f}s "
+                f"(currently over by {budget - max_duration:.0f}s)."
+            )
+
     return Storyboard(
         title=str(config.get("title") or path.stem),
         languages=languages,
@@ -403,6 +460,7 @@ def parse_storyboard(path: Path) -> Storyboard:
         scenes_portrait_dir=scenes_portrait_dir,
         scenes=scenes,
         project_brief=project_brief,
+        max_duration=max_duration,
     )
 
 
@@ -868,6 +926,27 @@ def _fmt_ts(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
 
 
+class GeminiQuotaError(RuntimeError):
+    """Raised when Gemini returns a 429 daily-quota exhaustion (not retryable
+    within the run — the per-day limit only resets on a daily boundary)."""
+
+
+def _gemini_error_message(detail: str) -> str:
+    """Pull a concise message out of a Gemini error body (the JSON's
+    error.message), falling back to a truncated blob."""
+    try:
+        return str(json.loads(detail)["error"]["message"]).strip()[:240]
+    except (ValueError, KeyError, TypeError):
+        return " ".join(detail.split())[:240]
+
+
+def _is_daily_quota(detail: str) -> bool:
+    """True when a 429 body is a per-day quota (e.g. the metric
+    generate_requests_per_model_per_day), which cannot recover in seconds."""
+    norm = re.sub(r"[\s_]+", "", detail.lower())
+    return "perday" in norm
+
+
 def _split_sentences(text: str) -> List[str]:
     parts = re.split(r"(?<=[.!?])\s+", text.strip())
     return [p.strip() for p in parts if p.strip()]
@@ -916,8 +995,11 @@ def _gemini_synth(text: str, api_key: str, model: str, voice: str,
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read())
     except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", "replace")[:400]
-        raise RuntimeError(f"gemini HTTP {e.code}: {detail}") from e
+        detail = e.read().decode("utf-8", "replace")
+        msg = _gemini_error_message(detail)
+        if e.code == 429 and _is_daily_quota(detail):
+            raise GeminiQuotaError(msg) from e
+        raise RuntimeError(f"gemini HTTP {e.code}: {msg}") from e
     try:
         inline = data["candidates"][0]["content"]["parts"][0]["inlineData"]
     except (KeyError, IndexError, TypeError) as e:
@@ -982,22 +1064,36 @@ def _generate_audio_gemini(sb: Storyboard, output: Path, force: bool,
             log(f"  gemini {sb.gemini_model}/{voice} -> {lang}/{sc.basename}…")
             _t = time.monotonic()
             attempts = retries + 1
-            last_err: "BaseException | None" = None
             for attempt in range(1, attempts + 1):
                 try:
                     _gemini_tts_one(sc.narration[lang], mp3, srt, api_key,
                                     sb.gemini_model, voice, timeout)
                     break
+                except GeminiQuotaError as e:
+                    # A per-day quota won't recover in seconds — fail fast with
+                    # actionable guidance instead of burning retries.
+                    raise SystemExit(
+                        f"Gemini daily quota exhausted at {lang}/{sc.basename}: {e}\n"
+                        f"The free tier caps the preview TTS model "
+                        f"({sb.gemini_model}) at a low number of requests/day. Options:\n"
+                        "  • finish now for free with  --tts edge  "
+                        "(no quota; voice id-ID-ArdiNeural)\n"
+                        "  • re-run after the daily quota resets — already-generated "
+                        "audio is cached, so it resumes where it stopped\n"
+                        "  • if you enabled billing, make sure the GEMINI_API_KEY in "
+                        ".env belongs to the billed project (preview TTS models can "
+                        "still keep low daily caps)."
+                    )
                 except BaseException as e:  # noqa: BLE001
-                    last_err = e
                     if attempt >= attempts:
                         raise SystemExit(
                             f"gemini TTS failed for {lang}/{sc.basename} after "
-                            f"{attempts} attempts: {e}"
+                            f"{attempts} attempts: {str(e)[:160]}"
                         )
-                    log(f"    retry {attempt}/{attempts} ({type(e).__name__}: {e}); "
-                        f"waiting {wait}s…")
-                    time.sleep(wait)
+                    delay = wait * (2 ** (attempt - 1))  # exponential backoff
+                    log(f"    retry {attempt}/{attempts} ({type(e).__name__}: "
+                        f"{str(e)[:120]}); waiting {delay:.0f}s…")
+                    time.sleep(delay)
             log(f"    ↳ {lang}/{sc.basename}.mp3 in {time.monotonic() - _t:.1f}s")
 
 
@@ -1504,6 +1600,9 @@ def cmd_build(args: argparse.Namespace) -> None:
     print(f"TTS:          {sb.tts_provider} (voices: {sb.voices})")
     print(f"AI CLI:       {sb.ai_cli}")
     print(f"Scenes dirs:  landscape={sb.scenes_landscape_dir}, portrait={sb.scenes_portrait_dir}")
+    if sb.max_duration is not None:
+        budget = sum(s.fallback_duration for s in sb.scenes)
+        print(f"Duration:     budget {budget:.0f}s / cap {sb.max_duration:.0f}s")
     print()
 
     if args.only:
