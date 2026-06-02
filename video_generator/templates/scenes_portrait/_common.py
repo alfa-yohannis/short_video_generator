@@ -176,7 +176,7 @@ def _content_units(scene):
     distinct blocks. Used for block-vs-block overlap (a box drawn over code, a
     stray label over a card) that text-vs-text comparison alone misses."""
     fw, fh = config.frame_width, config.frame_height
-    out = []
+    cand = []
     for top in scene.mobjects:
         if not _has_text(top):
             continue
@@ -185,7 +185,25 @@ def _content_units(scene):
             continue
         if w >= 0.97 * fw or h >= 0.97 * fh:   # full-bleed bar / background
             continue
-        out.append(top)
+        cand.append(top)
+    # Drop nested / promoted items: a unit whose centre sits inside a LARGER
+    # unit's box is that block's own content, not a peer block. Manim promotes a
+    # sub-mobject to the top level when you animate it (e.g. Indicate(child)),
+    # which would otherwise read as the child "overlapping" its own parent card.
+    boxes = []
+    for c in cand:
+        bb = _bbox(c)
+        boxes.append((bb, (bb[1] - bb[0]) * (bb[3] - bb[2]), c))
+    out = []
+    for bi, ai, ci in boxes:
+        cx, cy = (bi[0] + bi[1]) / 2.0, (bi[2] + bi[3]) / 2.0
+        nested = any(
+            cj is not ci and aj > ai
+            and bj[0] <= cx <= bj[1] and bj[2] <= cy <= bj[3]
+            for bj, aj, cj in boxes
+        )
+        if not nested:
+            out.append(ci)
     return out
 
 

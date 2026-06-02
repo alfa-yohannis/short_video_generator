@@ -95,6 +95,11 @@ def log(msg: str) -> None:
 DEFAULT_EDGE_VOICE = "id-ID-ArdiNeural"
 DEFAULT_GEMINI_VOICE = "Iapetus"
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash-preview-tts"
+# Default Claude model + effort for narration / scene generation. Opus 4.8 at
+# the top ("max") effort tier gives the best layout-aware scene code. Override
+# per run with --claude-model / --claude-effort.
+DEFAULT_CLAUDE_MODEL = "claude-opus-4-8"
+DEFAULT_CLAUDE_EFFORT = "max"
 GEMINI_TTS_ENDPOINT = (
     "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 )
@@ -437,6 +442,8 @@ def run_ai_cli(cli: str, prompt: str) -> str:
         # a plain text response that IS the file content.
         cmd = [
             binary, "-p",
+            "--model", DEFAULT_CLAUDE_MODEL,
+            "--effort", DEFAULT_CLAUDE_EFFORT,
             "--tools", "",
             "--permission-mode", "bypassPermissions",
             "--allow-dangerously-skip-permissions",
