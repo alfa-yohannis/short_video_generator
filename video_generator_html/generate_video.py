@@ -1,31 +1,29 @@
 #!/usr/bin/env python3
-"""Generate a bilingual Manim tutorial video from a storyboard markdown file.
+"""Generate a bilingual tutorial video from a storyboard, rendered as HTML/CSS.
+
+This is the web sibling of the Manim app. The Python orchestrator and storyboard
+format are identical; the visual engine is HTML/CSS with Mermaid diagrams,
+animated with a seekable anime.js timeline and captured frame-by-frame with
+Playwright (Python — no Node toolchain):
+
+    storyboard.md -> narration (Claude|Codex) -> MP3 + SRT (Edge|Gemini)
+                  -> HTML scene module .js (Claude|Codex) -> Playwright screenshots
+                  -> silent MP4 -> mux audio -> concat -> merged SRT + youtube.txt
 
 Usage:
-    python3 video_generator/generate_video.py \
-        --storyboard storyboard/storyboard_v2.md \
-        --output build/strategy_pattern
+    python3 video_generator_html/generate_video.py \
+        --storyboard storyboards/singleton_pattern_storyboard.md \
+        --output     tmp/singleton_html
 
-On first run the script bootstraps a project-local `.venv` at the repo root,
-installs its Python deps into it, and re-execs itself there, so any Python 3
-interpreter can launch it.
+On first run the script bootstraps a project-local `.venv` at the repo root
+(PyYAML, srt, edge-tts, playwright) and re-execs itself there. Rendering uses a
+Chromium via Playwright; a system Chrome is used when present, else run
+`playwright install chromium` once.
 
-Required CLI arguments are only the storyboard markdown path and the target
-output directory; every intermediate artifact (scripts, audio, subtitles, raw
-renders, muxed clips, final videos) is written under <output>.
-
-The storyboard is a markdown file. The first block must be YAML front-matter
-between '---' fences declaring the project config. The body contains one '##
-Scene: <basename> / <ClassName>' heading per scene, each with optional '###'
-subsections such as 'description', 'narration.id', 'narration.en', 'notes'.
-
-If a scene's narration.<lang> section is missing, the generator can call out
-to a Claude / Codex CLI (configured via 'ai_cli' in front-matter) to fill it
-in. The Manim scene .py files themselves are NOT auto-generated; they must
-exist under the configured scenes_landscape_dir / scenes_portrait_dir.
-
-The patch to scenes_*/_common.py honours MANIM_AUDIO_DIR so the same scene
-files can be rendered against an arbitrary output directory.
+The storyboard format is the same as the Manim app: YAML front-matter, then one
+`## Scene: <basename> / <ClassName>` heading per scene with `### description`
+(and optional `### narration.id|en`). Missing narration is AI-filled; missing
+scene modules are AI-generated into <output>/render_html/scenes/<basename>.js.
 """
 
 from __future__ import annotations
@@ -49,7 +47,8 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 GENERATOR_ROOT = Path(__file__).resolve().parent
-TEMPLATES_DIR = GENERATOR_ROOT / "templates"
+HTML_TEMPLATE_DIR = GENERATOR_ROOT / "template"   # harness + theme + components + anime/mermaid + fonts
+RENDER_DIRNAME = "render_html"                     # materialised under <output>/
 REPO_ROOT = GENERATOR_ROOT.parent
 REQUIREMENTS = GENERATOR_ROOT / "requirements.txt"
 
@@ -59,7 +58,6 @@ REQUIREMENTS = GENERATOR_ROOT / "requirements.txt"
 VENV_DIR = REPO_ROOT / ".venv"
 VENV_BIN = VENV_DIR / "bin"
 PYTHON_BIN = VENV_BIN / "python"
-MANIM_BIN = VENV_BIN / "manim"
 EDGE_TTS_BIN = VENV_BIN / "edge-tts"
 
 
@@ -128,13 +126,13 @@ def _bootstrap_venv() -> None:
     if not pip.exists():
         sys.exit(f"[setup] venv looks broken; missing {pip}. Delete {VENV_DIR} and re-run.")
     if fresh:
-        print("[setup] installing dependencies (PyYAML, srt, manim, edge-tts)…")
+        print("[setup] installing dependencies (PyYAML, srt, edge-tts, playwright)…")
         subprocess.check_call([str(pip), "install", "-q", "--upgrade", "pip"])
         if REQUIREMENTS.exists():
             subprocess.check_call([str(pip), "install", "-q", "-r", str(REQUIREMENTS)])
         else:
             subprocess.check_call([str(pip), "install", "-q",
-                                   "PyYAML", "srt", "manim", "edge-tts"])
+                                   "PyYAML", "srt", "edge-tts", "playwright"])
     env = os.environ.copy()
     env[VENV_MARK] = "1"
     os.execvpe(str(python), [str(python), str(Path(__file__).resolve()), *sys.argv[1:]], env)
@@ -151,12 +149,12 @@ _PYTHON_PACKAGES = [
     # (import_name, pip_name)
     ("yaml", "PyYAML"),
     ("srt", "srt"),
+    ("playwright", "playwright"),
 ]
 
 # Executables we shell out to. `install` is either a pip package name (to be
 # installed into .venv) or None if the tool must be installed by the user.
 _BINARIES = [
-    {"path": MANIM_BIN, "name": "manim", "install_pip": "manim", "required": True},
     {"path": EDGE_TTS_BIN, "name": "edge-tts", "install_pip": "edge-tts", "required": True},
     {"path": shutil.which("ffmpeg"), "name": "ffmpeg", "install_pip": None, "required": True,
      "hint": "Install via the system package manager, e.g. `sudo apt install ffmpeg`."},
@@ -590,230 +588,162 @@ def ensure_narration(sb: Storyboard, sc: Scene, lang: str, output: "Path | None"
 # --- Scene file materialization (templates + AI generation) ---------------
 
 
-def _materialize_scenes_dir(sb: Storyboard, output: Path, orient: str) -> Path:
-    """Decide the scenes dir for an orientation and copy templates if needed.
-
-    If the storyboard specified a scenes_<orient>_dir AND the dir exists, use
-    it as-is (the user is bringing their own Manim sources). Otherwise the
-    canonical location becomes <output>/scenes_<orient>/, and templates
-    (_common.py, fonts) are copied in once.
-    """
-    declared = sb.scenes_landscape_dir if orient == "landscape" else sb.scenes_portrait_dir
-    if declared is not None and declared.exists():
-        return declared
-    target = (output / f"scenes_{orient}").resolve()
-    target.mkdir(parents=True, exist_ok=True)
-    template_common = TEMPLATES_DIR / f"scenes_{orient}" / "_common.py"
-    target_common = target / "_common.py"
-    # _common.py is generator-owned (only materialised here, never hand-edited
-    # in the default flow), so refresh it whenever the bundled template differs
-    # — otherwise older builds silently miss fixes like the layout auto-fit.
-    if template_common.exists() and (
-        not target_common.exists()
-        or target_common.read_bytes() != template_common.read_bytes()
-    ):
-        shutil.copy2(template_common, target_common)
-    # _common.py also expects assets/fonts/ next to the scenes dir (ROOT_DIR/assets/fonts).
-    assets_target = output / "assets"
-    if not assets_target.exists() and (TEMPLATES_DIR / "assets").exists():
-        shutil.copytree(TEMPLATES_DIR / "assets", assets_target)
-    return target
+def _materialize_render_dir(output: Path) -> Path:
+    """Copy the HTML template (harness, theme.css, components.js, anime/mermaid, fonts)
+    into <output>/render_html/ — refreshing files when the bundled template
+    differs — and ensure the scenes/ subdir exists. Returns the render dir."""
+    render_dir = (output / RENDER_DIRNAME).resolve()
+    render_dir.mkdir(parents=True, exist_ok=True)
+    for src in HTML_TEMPLATE_DIR.rglob("*"):
+        rel = src.relative_to(HTML_TEMPLATE_DIR)
+        dst = render_dir / rel
+        if src.is_dir():
+            dst.mkdir(parents=True, exist_ok=True)
+            continue
+        if not dst.exists() or dst.read_bytes() != src.read_bytes():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+    (render_dir / "scenes").mkdir(parents=True, exist_ok=True)
+    return render_dir
 
 
-def _build_scene_prompt(sb: Storyboard, sc: Scene, orient: str, skeleton: str, common_src: str) -> str:
-    other_orient = "portrait" if orient == "landscape" else "landscape"
-    portrait_note = ""
-    if orient == "portrait":
-        portrait_note = (
-            "\nPortrait constraint: frame is 9 wide x 16 tall in Manim units, "
-            "rendered at 1080x1920. Keep ALL visible content above "
-            "SHORTS_SAFE_BOTTOM = -4.8 (the bottom 2/10 of the frame is "
-            "reserved for Reels/Shorts/TikTok caption overlays). Use "
-            "fit_to_shorts_area() to compress wide groups when needed.\n"
-        )
-    return f"""You are generating one Manim scene file for a tutorial video.
+def _html_common_src() -> str:
+    """The component API + CSS classes the AI may use, for the scene prompt."""
+    parts = []
+    for rel in ("components.js", "theme.css"):
+        p = HTML_TEMPLATE_DIR / rel
+        if p.exists():
+            parts.append(f"/* ===== {rel} ===== */\n{p.read_text(encoding='utf-8')}")
+    return "\n\n".join(parts)
+
+
+def _build_scene_prompt(sb: Storyboard, sc: Scene, skeleton: str, common_src: str) -> str:
+    return f"""You are generating ONE scene as a JavaScript ES module for a
+tutorial video. Diagrams are drawn with Mermaid (clean SVG); animation uses a
+single seekable anime.js timeline; text is HTML/CSS. It is captured frame by
+frame, so ALL motion must be tweens on the provided timeline (no CSS @keyframes,
+no setTimeout). One module handles BOTH orientations — use ctx.isPortrait to
+adapt; never hard-code one orientation.
 
 PROJECT TITLE: {sb.title}
 PROJECT BRIEF:
 {sb.project_brief}
 
 SCENE BASENAME: {sc.basename}
-SCENE CLASS:    {sc.classname}
-ORIENTATION:    {orient} (a parallel file will exist for {other_orient})
-FALLBACK DURATION: {sc.fallback_duration:.1f} seconds
+TARGET DURATION: ~{sc.fallback_duration:.1f} seconds (ctx.duration is the real value)
 SCENE DESCRIPTION:
 {sc.description or "(no description provided)"}
 
-LOCALIZED NARRATION (timed to fit the scene; visuals should illustrate this):
+LOCALIZED NARRATION (the visuals should illustrate this; do NOT print it verbatim):
 
 [id] {sc.narration.get("id", "(missing)").strip()}
 
 [en] {sc.narration.get("en", "(missing)").strip()}
-{portrait_note}
-HELPERS AVAILABLE FROM `_common` (reproduced verbatim below for reference):
-```python
+
+COMPONENT KIT + CSS you may use (reproduced for reference):
+```js
 {common_src}
 ```
 
-REFERENCE SKELETON (the structure your output MUST follow — same imports,
-same TARGET_DURATION assignment, same Scene subclass, same final wait):
-```python
+REFERENCE SKELETON — your output MUST follow this shape:
+```js
 {skeleton}
 ```
 
 REQUIREMENTS:
-- Output ONLY a complete valid Python file, no markdown fences, no commentary.
-- First line: `from manim import *`
-- Second line group: `from _common import (...)` importing every helper you use.
-- Module-level: `TARGET_DURATION = audio_duration("{sc.basename}", {sc.fallback_duration:.1f})`
-- Exactly one class: `class {sc.classname}(Scene):` with a single `construct` method.
-- `self.add(tech_background())` at the very start of `construct`.
-- Wrap every user-visible string with `L("teks Indonesia", "english text")`.
-- Avoid orientation words ("left", "right", "above", "below") in any visible string.
-- End `construct` with `self.wait(max(0.5, TARGET_DURATION - elapsed))` where
-  `elapsed` is the sum of the `run_time` values you used.
-- Use only helpers documented in the `_common` source above; do not import
-  anything else.
-- Keep visuals clean and instructional. Use semantic colors: DANGER for
-  problems/naive code, OK for improved/refactored states, HIGHLIGHT for the
-  currently-discussed element, PRIMARY for headline statements, ACCENT for
-  section labels and emphasis.
-- `title_bar`, `title_text`, `body_text`, `section_label`, and `bullet_list`
-  all feed their text into Pango `MarkupText`, which parses Pango XML markup.
-  Every `&` in those strings MUST be written as `&amp;`, every `<` as `&lt;`,
-  every `>` as `&gt;`. Do not put raw ampersands or angle brackets inside
-  any string that ends up in `L(...)`, `title_bar(...)`, `title_text(...)`,
-  `body_text(...)`, `section_label(...)`, or `bullet_list([...])` items.
-- Code shown via `code_card(...)` is NOT Pango markup; raw `&`, `<`, `>`
-  are fine there.
+- Output ONLY a complete valid .js ES module. No markdown fences, no commentary.
+- `export default async function build(ctx) {{ ... }}` (async — c.diagram awaits Mermaid).
+- Destructure from ctx: `const {{stage, c, L, tl, duration, isPortrait}} = ctx;`.
+- Build DOM ONLY with the kit `c` (c.content, c.titleBar, c.titleText, c.bodyText,
+  c.sectionLabel, c.bulletList, c.codeCard, c.el). Append a `c.content()` column
+  to `stage` and the title bar to `stage`. Let CSS flexbox lay things out — no
+  absolute pixel positions for text.
+- For ANY diagram (UML class box, flowchart, sequence, relationships) use
+  `const d = await c.diagram(`...mermaid text...`)` — NEVER hand-build boxes/arrows
+  out of divs. For a UML class use a Mermaid `classDiagram` (which handles
+  `+getInstance() AppConfig` fine). For flow use `flowchart LR`.
+  MERMAID SYNTAX SAFETY (else it fails to parse): in flowcharts ALWAYS quote node
+  and edge labels and keep them plain — `A["AppConfig"] -->|"creates"| B["instance"]`.
+  Do NOT put parentheses, colons, slashes, or other punctuation inside flowchart
+  labels (write `creates` not `getInstance()`); avoid raw quotes inside a label.
+- Wrap every visible string with `L("teks Indonesia", "english text")`.
+- Animate ONLY by adding tweens to the PROVIDED `tl` (anime.js syntax, times in
+  MILLISECONDS): `tl.add({{targets: el, opacity:[0,1], translateY:[30,0], duration:600}}, offsetMs)`.
+  Do NOT call `gsap.timeline()`, `anime.timeline()` or `anime(...)` — `gsap` does
+  not exist and the timeline is already created for you as `tl`.
+  Animate opacity / translateX / translateY / scale. Do not read computed layout
+  (getBoundingClientRect, offsetWidth) — unreliable headless.
+- Semantic colors via opts, e.g. `c.bodyText(txt, {{color: 'DANGER'}})`: DANGER for
+  naive/buggy, OK for improved states, HIGHLIGHT for the current focus, PRIMARY
+  for headlines, ACCENT for labels.
+- Code inside c.codeCard(code, {{title}}) is rendered verbatim — raw &, <, > are fine.
 
-Return ONLY the Python file contents.
+Return ONLY the JavaScript module contents.
 """
 
 
-_FENCE_BLOCK_RE = re.compile(r"```(?:python|py)?[ \t]*\n(.*?)```", re.S | re.I)
+_FENCE_BLOCK_RE = re.compile(r"```(?:javascript|js|jsx|ts|typescript)?[ \t]*\n(.*?)```", re.S | re.I)
 
 
 def _strip_code_fences(text: str) -> str:
-    """Pull a clean Python source out of an AI reply.
-
-    Handles the two ways the model strays from "output only the file":
-      1. It wraps the file in a ``` fence (optionally with prose around it) —
-         take the first fenced block.
-      2. It prepends a prose sentence before the code (e.g. "Here is scene 6,
-         ~30s:") — the leading non-code line then makes `ast.parse` choke (a
-         bare "30s" is an invalid decimal literal). The scene prompt mandates
-         `from manim import *` as the first line, so we drop everything before
-         the first import line.
-    """
+    """Pull a clean JS module out of an AI reply: take the first ``` fenced block
+    if present, then drop any prose preamble before the first real code line."""
     text = text.strip()
     m = _FENCE_BLOCK_RE.search(text)
     if m:
         text = m.group(1).strip()
     lines = text.splitlines()
     start = next((i for i, ln in enumerate(lines)
-                  if ln.lstrip().startswith("from manim import")), None)
-    if start is None:
-        start = next((i for i, ln in enumerate(lines)
-                      if ln.lstrip().startswith(("from ", "import ", "#!"))), None)
-    if start:  # only trim when real preamble precedes the code (start > 0)
+                  if ln.lstrip().startswith(("export ", "import ", "const ", "//", "/*"))), None)
+    if start:  # only trim when real preamble precedes the code
         text = "\n".join(lines[start:]).strip()
     return text
 
 
-# Match a Python string literal — single or double quote, no triple, no backslash
-# escapes — captured group is the inner content. Good enough for L(...) /
-# MarkupText(...) call args, which is what the AI tends to put `&` in.
-_STRING_LITERAL_RE = re.compile(r"(?P<q>['\"])(?P<body>[^'\"\\\n]*?)(?P=q)")
-_KNOWN_ENTITIES = ("&amp;", "&lt;", "&gt;", "&quot;", "&apos;", "&#")
-
-
-def _escape_unsafe_ampersands(src: str) -> str:
-    """Walk through every short Python string literal in `src` and rewrite a
-    bare `&` to `&amp;` unless it already starts a recognised XML entity.
-
-    This is a guard against a recurring Pango/MarkupText failure mode: every
-    helper in `_common.py` (title_bar, title_text, body_text, section_label,
-    bullet_list, ...) feeds its argument straight into `MarkupText`, which
-    parses Pango markup and rejects raw `&`.
-    """
-
-    def fix(match: re.Match) -> str:
-        body = match.group("body")
-        if "&" not in body:
-            return match.group(0)
-        out = []
-        i = 0
-        while i < len(body):
-            ch = body[i]
-            if ch == "&" and not any(
-                body[i:].startswith(ent) for ent in _KNOWN_ENTITIES
-            ):
-                out.append("&amp;")
-            else:
-                out.append(ch)
-            i += 1
-        return f"{match.group('q')}{''.join(out)}{match.group('q')}"
-
-    return _STRING_LITERAL_RE.sub(fix, src)
-
-
 def _validate_scene_source(path: Path, src: str) -> None:
-    """Parse `src` with the stdlib `ast`. Raise with a clear message if it
-    isn't valid Python — better to fail at generation time than mid-render."""
-    import ast
-
-    try:
-        ast.parse(src, filename=str(path))
-    except SyntaxError as exc:
+    """No JS engine runs in this stage, so apply cheap heuristics: it must export
+    a default build function and have balanced brackets. The browser is the real
+    syntax gate at render time."""
+    if "export default" not in src:
         raise SystemExit(
-            f"AI-generated scene at {path} is not valid Python: "
-            f"line {exc.lineno} col {exc.offset}: {exc.msg}\n"
-            "Re-run with --force after editing the file, or delete it and "
-            "re-run --stage scenes to regenerate."
-        ) from exc
+            f"AI-generated scene {path} has no `export default` build function. "
+            "Delete it and re-run --stage scenes to regenerate."
+        )
+    for open_c, close_c in (("{", "}"), ("(", ")"), ("[", "]")):
+        if src.count(open_c) != src.count(close_c):
+            raise SystemExit(
+                f"AI-generated scene {path} has unbalanced '{open_c}{close_c}'. "
+                "Delete it and re-run --stage scenes to regenerate."
+            )
 
 
-def ensure_scene_files(sb: Storyboard, output: Path, force: bool) -> Tuple[Path, Path]:
-    """Make sure every scene .py exists under the materialised scenes dirs.
-
-    Returns the resolved (landscape_dir, portrait_dir). After this step,
-    `sb.scenes_landscape_dir` and `sb.scenes_portrait_dir` are updated to
-    point at the locations actually used downstream.
-    """
-    landscape_dir = _materialize_scenes_dir(sb, output, "landscape")
-    portrait_dir = _materialize_scenes_dir(sb, output, "portrait")
-    sb.scenes_landscape_dir = landscape_dir
-    sb.scenes_portrait_dir = portrait_dir
-
-    skeleton_path = TEMPLATES_DIR / "scene_skeleton.py"
+def ensure_scene_files(sb: Storyboard, output: Path, force: bool) -> Path:
+    """AI-generate any missing scene module into <output>/render_html/scenes/,
+    after materialising the render template. Returns the render dir."""
+    render_dir = _materialize_render_dir(output)
+    scenes_dir = render_dir / "scenes"
+    skeleton_path = HTML_TEMPLATE_DIR / "scene_skeleton.js"
     skeleton = skeleton_path.read_text(encoding="utf-8") if skeleton_path.exists() else ""
+    common_src = _html_common_src()
 
-    for orient, scenes_dir in (("landscape", landscape_dir), ("portrait", portrait_dir)):
-        common_path = scenes_dir / "_common.py"
-        common_src = common_path.read_text(encoding="utf-8") if common_path.exists() else ""
-        for sc in sb.scenes:
-            scene_path = scenes_dir / sc.file
-            if scene_path.exists() and not force:
-                continue
-            if sb.ai_cli in ("", "none", None):
-                raise SystemExit(
-                    f"Scene file {scene_path} is missing and no ai_cli is "
-                    "configured to generate it. Either drop the .py in place "
-                    "or set `ai_cli: claude` in the storyboard front-matter."
-                )
-            log(f"  ai-generate {orient}/{sc.file} via {sb.ai_cli}…")
-            _t = time.monotonic()
-            prompt = _build_scene_prompt(sb, sc, orient, skeleton, common_src)
-            scene_src = run_ai_cli(sb.ai_cli, prompt)
-            scene_src = _strip_code_fences(scene_src)
-            if not scene_src.strip():
-                raise SystemExit(f"AI returned empty source for {scene_path}")
-            scene_src = _escape_unsafe_ampersands(scene_src)
-            _validate_scene_source(scene_path, scene_src)
-            scene_path.write_text(scene_src.rstrip() + "\n", encoding="utf-8")
-            log(f"    ↳ {orient}/{sc.file} in {time.monotonic() - _t:.1f}s")
-    return landscape_dir, portrait_dir
+    for sc in sb.scenes:
+        scene_path = scenes_dir / f"{sc.basename}.js"
+        if scene_path.exists() and not force:
+            continue
+        if sb.ai_cli in ("", "none", None):
+            raise SystemExit(
+                f"Scene module {scene_path} is missing and no ai_cli is configured "
+                "to generate it. Drop the .js in place or set `ai_cli: claude`."
+            )
+        log(f"  ai-generate scenes/{sc.basename}.js via {sb.ai_cli}…")
+        _t = time.monotonic()
+        scene_src = _strip_code_fences(run_ai_cli(sb.ai_cli, _build_scene_prompt(sb, sc, skeleton, common_src)))
+        if not scene_src.strip():
+            raise SystemExit(f"AI returned empty source for {scene_path}")
+        _validate_scene_source(scene_path, scene_src)
+        scene_path.write_text(scene_src.rstrip() + "\n", encoding="utf-8")
+        log(f"    ↳ scenes/{sc.basename}.js in {time.monotonic() - _t:.1f}s")
+    return render_dir
 
 
 # --- Pipeline steps -------------------------------------------------------
@@ -1249,194 +1179,168 @@ def _generate_audio_gemini(sb: Storyboard, output: Path, force: bool,
             log(f"    ↳ {lang}/{sc.basename}.mp3 in {time.monotonic() - _t:.1f}s")
 
 
-def _extract_layout_issues(text: str) -> str:
-    """Pull the layout-violation summary out of a failed render's output.
-
-    The scene `_common.py` raises `LayoutError: [layout] N issue(s) in Cls:
-    OVERFLOW: …; OVERLAP: …` in strict mode and also prints `  - <issue>`
-    bullet lines. Prefer the single-line LayoutError message; fall back to the
-    bullets. Returns "" when the failure wasn't a layout violation."""
-    lines = text.splitlines()
-    for line in lines:
-        s = line.strip()
-        if s.startswith("LayoutError:"):
-            return s[len("LayoutError:"):].strip()
-    bullets = [ln.strip()[2:].strip() for ln in lines if ln.strip().startswith("- ")]
-    if bullets and any("[layout]" in ln for ln in lines):
-        return "; ".join(bullets)
-    return ""
-
-
-_RENDER_ERROR_RE = re.compile(r"\b([A-Za-z_][\w.]*(?:Error|Exception))\b\s*:\s*(.+)")
-_SCENE_LOC_RE = re.compile(r"(scene_[\w./-]+\.py)[:\s]+(\d+)\s+in\s+(\w+)")
-
-
-def _extract_render_error(text: str) -> str:
-    """Pull the failing exception (e.g. `NameError: name 'X' is not defined`)
-    out of a Manim render's output, with the scene file:line for context. Used to
-    feed a generic (non-layout) render failure back to the AI for repair."""
-    err = ""
-    for line in text.splitlines():
-        m = _RENDER_ERROR_RE.search(line.strip())
-        if m and "Traceback" not in line:
-            err = f"{m.group(1)}: {m.group(2).strip()}"  # keep the LAST match
-    if not err:
-        return ""
-    locs = _SCENE_LOC_RE.findall(text)
-    if locs:
-        fname, lineno, func = locs[-1]
-        return f"{err}  (at {Path(fname).name}:{lineno} in {func})"
-    return err
-
-
-def _build_repair_prompt(sb: Storyboard, sc: Scene, orient: str,
-                         skeleton: str, common_src: str,
-                         current_src: str, problem: str, is_layout: bool) -> str:
-    base = _build_scene_prompt(sb, sc, orient, skeleton, common_src)
-    if is_layout:
-        safe_note = ""
-        if orient == "portrait":
-            safe_note = (" and entirely above SHORTS_SAFE_BOTTOM = -4.8 (the bottom "
-                         "2/10 reserved for caption overlays)")
-        fix = f"""
-
-LAYOUT REPAIR — IMPORTANT:
-A previous version of this exact scene FAILED an automated layout check with:
-{problem}
-
-Here is that failing scene source:
-```python
-{current_src}
-```
-
-Produce a corrected COMPLETE scene file that preserves the same content, timing
-(`TARGET_DURATION`, `run_time` values, final wait) and instructional intent, but
-guarantees every visible text mobject stays fully inside the frame{safe_note},
-with no two text labels overlapping by more than half the smaller one. Fix it by
-repositioning, reducing font `size=`, wrapping long strings onto multiple lines,
-arranging with VGroup(...).arrange(...), or (portrait) fit_to_shorts_area(...).
-Return ONLY the corrected Python file, no fences, no commentary.
-"""
-    else:
-        fix = f"""
+def _build_repair_prompt(sb: Storyboard, sc: Scene, skeleton: str, common_src: str,
+                         current_src: str, problem: str) -> str:
+    return _build_scene_prompt(sb, sc, skeleton, common_src) + f"""
 
 RENDER REPAIR — IMPORTANT:
-A previous version of this exact scene FAILED to render with this error:
+A previous version of this exact scene FAILED to render in the browser with:
 {problem}
 
-Here is that failing scene source:
-```python
+Here is that failing scene module:
+```js
 {current_src}
 ```
 
-Produce a corrected COMPLETE scene file that fixes the error while preserving the
-same content, timing (`TARGET_DURATION`, `run_time` values, final wait) and
-instructional intent. Common causes: a NameError from a colour/constant or helper
-that is NOT defined in the `_common` source above; a wrong/typo'd argument to a
-helper; calling a constant like a function. Use ONLY names, colours and helpers
-that actually appear in the `_common` source above — do not invent constants.
-Return ONLY the corrected Python file, no fences, no commentary.
+Produce a corrected COMPLETE module that fixes the error while preserving the
+same content, timing and instructional intent. Common causes: calling a helper
+that isn't on the `c` kit, a wrong argument, reading computed layout, or running
+animation off the anime.js timeline `tl`. Use ONLY the helpers/classes that
+appear in the kit above. Return ONLY the JavaScript module, no fences.
 """
-    return base + fix
 
 
-def _repair_scene(sb: Storyboard, sc: Scene, orient: str, scene_path: Path,
-                  problem: str, is_layout: bool) -> None:
-    """Ask the AI CLI to fix a scene that failed (layout check or render error),
-    validate the reply, and overwrite the scene file in place."""
-    scenes_dir = scene_path.parent
-    common_path = scenes_dir / "_common.py"
-    common_src = common_path.read_text(encoding="utf-8") if common_path.exists() else ""
-    skeleton_path = TEMPLATES_DIR / "scene_skeleton.py"
+def _repair_scene(sb: Storyboard, sc: Scene, scene_path: Path, problem: str) -> None:
+    """Ask the AI CLI to fix a scene that failed to render, validate, overwrite."""
+    skeleton_path = HTML_TEMPLATE_DIR / "scene_skeleton.js"
     skeleton = skeleton_path.read_text(encoding="utf-8") if skeleton_path.exists() else ""
+    common_src = _html_common_src()
     current_src = scene_path.read_text(encoding="utf-8")
-    prompt = _build_repair_prompt(
-        sb, sc, orient, skeleton, common_src, current_src, problem, is_layout
-    )
+    prompt = _build_repair_prompt(sb, sc, skeleton, common_src, current_src, problem)
     new_src = _strip_code_fences(run_ai_cli(sb.ai_cli, prompt))
     if not new_src.strip():
         raise SystemExit(f"AI returned empty source repairing {scene_path}")
-    new_src = _escape_unsafe_ampersands(new_src)
     _validate_scene_source(scene_path, new_src)
     scene_path.write_text(new_src.rstrip() + "\n", encoding="utf-8")
 
 
-def render_manim(sb: Storyboard, output: Path, lang: str, orient: str, force: bool,
-                 check_layout: str = "off", repair_attempts: int = 0) -> None:
-    scenes_dir = sb.scenes_landscape_dir if orient == "landscape" else sb.scenes_portrait_dir
-    if not scenes_dir.exists():
-        raise SystemExit(f"scenes_{orient}_dir does not exist: {scenes_dir}")
-    video_dir = output / "video" / lang / orient
-    video_dir.mkdir(parents=True, exist_ok=True)
-    media_dir = output / "manim_media" / lang / orient
-    media_dir.mkdir(parents=True, exist_ok=True)
-    env = os.environ.copy()
-    env["MANIM_LANG"] = lang
-    env["LANG_CODE"] = lang
-    env["MANIM_AUDIO_DIR"] = str((output / "audio").resolve())
-    # The scene _common.py reads this to run its layout self-check (overflow /
-    # clipping / overlap). "strict" makes a violation fail the render.
-    env["MANIM_CHECK_LAYOUT"] = check_layout
-    if not MANIM_BIN.exists():
-        raise SystemExit(f"manim binary not found at {MANIM_BIN}")
-    for sc in sb.scenes:
-        dest = video_dir / f"{sc.basename}.mp4"
-        if dest.exists() and not force:
-            continue
-        scene_path = scenes_dir / sc.file
-        if not scene_path.exists():
-            raise SystemExit(f"Scene file missing: {scene_path}")
-        cmd: List[str] = [str(MANIM_BIN)]
-        if orient == "landscape":
-            w, h = sb.resolution_landscape
-            cmd += ["--resolution", f"{w},{h}"]
-        cmd += [
-            "--fps", str(sb.fps),
-            "--media_dir", str(media_dir),
-            str(scene_path), sc.classname,
-        ]
-        log(f"  render {lang}/{orient}/{sc.basename}::{sc.classname}…")
-        _t = time.monotonic()
-        # When AI repair is enabled, any render failure — a strict-mode layout
-        # violation OR a crash (NameError, wrong helper arg, …) — is fed back to
-        # the CLI to regenerate the scene and re-render, up to repair_attempts
-        # times before giving up.
-        max_repairs = repair_attempts if sb.ai_cli not in ("", "none", None) else 0
-        for attempt in range(max_repairs + 1):
-            proc = subprocess.run(cmd, env=env, cwd=str(scenes_dir),
-                                  capture_output=True, text=True)
-            if proc.stdout:
-                sys.stdout.write(proc.stdout)
-            if proc.stderr:
-                sys.stderr.write(proc.stderr)
-            if proc.returncode == 0:
-                break
-            combined = (proc.stdout or "") + (proc.stderr or "")
-            layout = _extract_layout_issues(combined)
-            problem = layout or _extract_render_error(combined)
-            if not problem or attempt >= max_repairs:
-                if problem and max_repairs > 0:
-                    kind = "Layout check" if layout else "Render"
-                    raise SystemExit(
-                        f"{kind} still failing for {orient}/{sc.basename} after "
-                        f"{max_repairs} AI repair attempt(s): {problem}"
-                    )
-                raise subprocess.CalledProcessError(proc.returncode, cmd)
-            kind = "layout violation" if layout else "render error"
-            log(f"    {kind}, repairing {orient}/{sc.file} via {sb.ai_cli} "
-                f"(attempt {attempt + 1}/{max_repairs})… {problem}")
-            _repair_scene(sb, sc, orient, scene_path, problem, bool(layout))
-        log(f"    ↳ {lang}/{orient}/{sc.basename}.mp4 in {time.monotonic() - _t:.1f}s")
+_CHROME_CANDIDATES = ("google-chrome-stable", "google-chrome", "chromium", "chromium-browser")
 
-        stem = scene_path.stem
-        candidates = list((media_dir / "videos" / stem).rglob(f"{sc.classname}.mp4"))
-        if not candidates:
-            raise SystemExit(
-                f"Could not find Manim render output for {scene_path}::{sc.classname}"
+
+def _resolve_chrome() -> "str | None":
+    """A system Chrome/Chromium path, so Playwright needn't download one."""
+    for name in _CHROME_CANDIDATES:
+        p = shutil.which(name)
+        if p:
+            return p
+    return None
+
+
+def _serve_dir(directory: Path):
+    """Start a background static HTTP server rooted at `directory`. Returns
+    (base_url, shutdown). Serving over http:// avoids the file:// CORS block on
+    ES-module imports."""
+    import functools
+    import threading
+    from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+
+    class _QuietHandler(SimpleHTTPRequestHandler):
+        def log_message(self, *args, **kwargs):
+            pass  # don't spam the render log with access lines
+
+    handler = functools.partial(_QuietHandler, directory=str(directory))
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    port = httpd.server_address[1]
+    return f"http://127.0.0.1:{port}", httpd.shutdown
+
+
+def _capture_scene(browser, base_url: str, sc: Scene, lang: str, orient: str,
+                   w: int, h: int, target: float, fps: int, dest: Path) -> "str | None":
+    """Render one scene by seeking its anime.js timeline frame-by-frame and
+    screenshotting, then encode the PNGs to a silent MP4. Returns an error string
+    (the browser-side JS error) on failure, or None on success."""
+    import tempfile
+
+    page = browser.new_page(viewport={"width": w, "height": h}, device_scale_factor=1)
+    try:
+        url = f"{base_url}/index.html?scene={sc.basename}&lang={lang}&orient={orient}&dur={target:.3f}"
+        page.goto(url)
+        page.wait_for_function("window.__ready === true", timeout=30000)
+        err = page.evaluate("window.__error")
+        if err:
+            return str(err)[:400]
+        frames = max(1, int(round(target * fps)))
+        with tempfile.TemporaryDirectory() as td:
+            tdp = Path(td)
+            for i in range(frames):
+                page.evaluate("(t) => window.__render(t)", i / fps)
+                page.screenshot(path=str(tdp / f"f_{i:05d}.png"))
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            subprocess.run(
+                ["ffmpeg", "-y", "-loglevel", "error",
+                 "-framerate", str(fps), "-i", str(tdp / "f_%05d.png"),
+                 "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", str(fps), str(dest)],
+                check=True,
             )
-        # Pick the newest if multiple qualities ended up there.
-        candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-        shutil.copy2(candidates[0], dest)
+        return None
+    except Exception as e:  # noqa: BLE001 — Playwright errors, timeouts, etc.
+        return f"{type(e).__name__}: {str(e)[:300]}"
+    finally:
+        page.close()
+
+
+def render_html(sb: Storyboard, output: Path, force: bool, repair_attempts: int = 0) -> None:
+    """Render every scene to a silent MP4 per (language, orientation) by driving
+    the HTML harness with Playwright. On a browser-side failure the error is fed
+    back to the AI to regenerate that scene, up to repair_attempts times."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        raise SystemExit("playwright not installed — it should be in requirements.txt; "
+                         "run the build once to bootstrap, or `pip install playwright`.")
+
+    render_dir = output / RENDER_DIRNAME
+    if not (render_dir / "index.html").exists():
+        raise SystemExit("render_html template missing — run the 'scenes' stage first.")
+    base_url, shutdown = _serve_dir(render_dir)
+    chrome = _resolve_chrome()
+    launch = {"args": ["--no-sandbox", "--disable-setuid-sandbox",
+                       "--hide-scrollbars", "--force-color-profile=srgb"]}
+    if chrome:
+        launch["executable_path"] = chrome
+    max_repairs = repair_attempts if sb.ai_cli not in ("", "none", None) else 0
+    try:
+        with sync_playwright() as p:
+            try:
+                browser = p.chromium.launch(**launch)
+            except Exception as e:  # noqa: BLE001
+                raise SystemExit(
+                    f"Could not launch a browser for Playwright ({e}). Install a "
+                    "system Chrome, or run `.venv/bin/python -m playwright install chromium`."
+                )
+            try:
+                for lang in sb.languages:
+                    for orient in sb.orientations:
+                        w, h = sb.resolution_landscape if orient == "landscape" else (1080, 1920)
+                        for sc in sb.scenes:
+                            dest = output / "video" / lang / orient / f"{sc.basename}.mp4"
+                            if dest.exists() and not force:
+                                continue
+                            mp3 = output / "audio" / lang / f"{sc.basename}.mp3"
+                            target = _ffprobe_duration(mp3) if _valid_audio(mp3) else sc.fallback_duration
+                            scene_path = render_dir / "scenes" / f"{sc.basename}.js"
+                            log(f"  render {lang}/{orient}/{sc.basename} ({target:.1f}s, {sb.fps}fps)…")
+                            _t = time.monotonic()
+                            for attempt in range(max_repairs + 1):
+                                err = _capture_scene(browser, base_url, sc, lang, orient,
+                                                     w, h, target, sb.fps, dest)
+                                if not err:
+                                    break
+                                if attempt >= max_repairs:
+                                    raise SystemExit(
+                                        f"HTML scene {sc.basename} failed to render after "
+                                        f"{max_repairs} AI repair attempt(s): {err}"
+                                    )
+                                log(f"    render error, repairing scenes/{sc.basename}.js via "
+                                    f"{sb.ai_cli} (attempt {attempt + 1}/{max_repairs})… {err}")
+                                _repair_scene(sb, sc, scene_path, err)
+                            log(f"    ↳ {lang}/{orient}/{sc.basename}.mp4 in {time.monotonic() - _t:.1f}s")
+            finally:
+                browser.close()
+    finally:
+        shutdown()
 
 
 def mux_clips(sb: Storyboard, output: Path, lang: str, orient: str, force: bool) -> None:
@@ -1727,10 +1631,7 @@ _WIPE_SUBDIRS = (
     "video",
     "clips",
     "final",
-    "scenes_landscape",
-    "scenes_portrait",
-    "manim_media",
-    "assets",
+    "render_html",
     "youtube",
 )
 
@@ -1830,19 +1731,14 @@ def cmd_build(args: argparse.Namespace) -> None:
         generate_audio(sb, output, args.force)
         _enforce_audio_cap(sb, output)         # measure + re-narrate if still over
         done()
-    if args.stage in ("all", "scenes"):
-        done = _stage("[3/8] materialize scene .py files (AI-generated when missing)")
+        done = _stage("[3/8] generate HTML scene modules (AI-generated when missing)")
         ensure_scene_files(sb, output, args.force)
         done()
     if args.stage in ("all", "render"):
-        done = _stage("[4/8] render Manim scenes")
-        # Render assumes scene .py files exist; populate dirs from defaults.
+        done = _stage("[4/8] render scenes with Playwright (HTML/CSS + Mermaid + anime.js)")
+        # Render needs the generated scene modules + template to exist.
         ensure_scene_files(sb, output, force=False)
-        for lang in sb.languages:
-            for orient in sb.orientations:
-                render_manim(sb, output, lang, orient, args.force,
-                             check_layout=args.check_layout,
-                             repair_attempts=args.repair_attempts)
+        render_html(sb, output, args.force, repair_attempts=args.repair_attempts)
         done()
     if args.stage in ("all", "mux"):
         done = _stage("[5/8] mux clips (video + audio)")
@@ -1911,20 +1807,10 @@ def main() -> None:
              "repo root, then 'gemini_api_key:' in the storyboard front-matter.",
     )
     ap.add_argument(
-        "--check-layout", choices=["off", "warn", "strict", "fit"], default="off",
-        help="At render time, check each scene's text for off-frame overflow / "
-             "clipping, portrait caption-zone violations, and text overlap. "
-             "'warn' logs issues; 'strict' fails the render; 'fit' auto-scales / "
-             "nudges overflowing text back inside the frame as it renders "
-             "(default: off).",
-    )
-    ap.add_argument(
-        "--repair-attempts", "--layout-repair-attempts", type=int, default=2,
-        dest="repair_attempts",
-        help="How many times to ask the AI CLI to fix a scene that FAILS to "
-             "render — a crash (NameError, bad helper arg, …) or, with "
-             "--check-layout strict, a layout violation — and re-render it before "
-             "giving up (default: 2; 0 disables AI repair).",
+        "--repair-attempts", type=int, default=2,
+        help="How many times to feed a scene's browser render error back to the "
+             "AI CLI to regenerate it and re-render, before giving up "
+             "(default: 2; 0 disables AI repair).",
     )
     ap.add_argument(
         "--skip-youtube", action="store_true",

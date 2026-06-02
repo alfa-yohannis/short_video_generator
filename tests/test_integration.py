@@ -45,6 +45,15 @@ def test_ffprobe_duration(g, tmp_path):
     assert g._ffprobe_duration(mp3) == pytest.approx(2.0, abs=0.3)
 
 
+@requires("ffmpeg", "ffprobe")
+def test_valid_audio_accepts_real_rejects_garbage(g, tmp_path):
+    good = silent_mp3(tmp_path / "good.mp3", seconds=1.0)
+    assert g._valid_audio(good) is True
+    bad = tmp_path / "bad.mp3"
+    bad.write_bytes(b"\x00\x01 not a real mp3 " * 16)  # non-empty but undecodable
+    assert g._valid_audio(bad) is False
+
+
 # --- Gemini PCM -> MP3 + estimated SRT (no network) -------------------------
 
 
@@ -70,7 +79,8 @@ def test_generate_audio_gemini_skips_when_present(g, tmp_path, monkeypatch):
              scenes=[_scene(g, "01_x")])
     (tmp_path / "audio" / "id").mkdir(parents=True)
     (tmp_path / "subtitles" / "id").mkdir(parents=True)
-    (tmp_path / "audio" / "id" / "01_x.mp3").write_bytes(b"x")
+    # A *valid* cached mp3 (not a fake byte) so _valid_audio accepts it.
+    silent_mp3(tmp_path / "audio" / "id" / "01_x.mp3", seconds=1.0)
     (tmp_path / "subtitles" / "id" / "01_x.srt").write_text(
         "1\n00:00:00,000 --> 00:00:01,000\nHalo\n", encoding="utf-8")
 

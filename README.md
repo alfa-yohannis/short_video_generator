@@ -19,6 +19,11 @@ code** — just a description per scene. When narration or a scene `.py` file is
 missing, the configured AI CLI writes it from the description. Both the narrator
 and the TTS engine are swappable.
 
+> **This is the Manim backend.** There's also a web backend that renders scenes
+> as HTML/CSS with Mermaid diagrams, animated with anime.js and captured via
+> Playwright — same storyboard and pipeline, different engine — documented
+> separately in [README_HTML.md](README_HTML.md).
+
 ---
 
 ## Features
@@ -248,12 +253,22 @@ from the description + narration + embedded `_common.py` helpers.
 ### Limiting total duration
 
 Set `max_duration` in the front-matter (e.g. `3 minutes`, `180`, `2:30`, `90s`)
-to cap the whole video. It's checked at **parse time**: the generator sums every
-scene's `fallback_duration` (which sets each scene's narration word budget, so it
-tracks the final runtime) and refuses to build if the total exceeds the cap —
-before any AI, TTS, or render cost. `max_scene_duration` is accepted as an alias
-and still means the whole-video total. To fit the cap, trim the per-scene
-`fallback_duration` values until they sum to ≤ your limit.
+to cap the whole video (`max_scene_duration` is an accepted alias and still means
+the whole-video total). It's enforced at three points:
+
+1. **Parse time** — the sum of per-scene `fallback_duration` values must be ≤ the
+   cap, or the build refuses before any AI/TTS/render cost.
+2. **Before TTS (estimate)** — once narration text exists, the generator
+   estimates each language's spoken time from the word count (~2 words/sec) and,
+   if it's over the cap, asks the AI to **compress the over-long scenes** so the
+   estimate fits — *before* spending a TTS pass.
+3. **After TTS (measured)** — it then ffprobes the real per-scene audio and, if a
+   language is still over, compresses the narration by the measured overshoot,
+   drops the stale audio, and **re-synthesizes**. This is the accurate guarantee.
+
+Narration is generated tightly (~1.9 words/sec, as a hard word limit) so it
+usually fits on the first pass; steps 2–3 are the safety net. To leave more
+headroom, trim the per-scene `fallback_duration` values.
 
 ### Bringing your own Manim sources
 

@@ -1,0 +1,3 @@
+# Dev/test-only dependencies. Install into the project-local .venv when you want
+# to run the test suite:  .venv/bin/pip install -r video_generator/requirements-dev.txt
+pytest>=8.0

@@ -1,0 +1,6 @@
+# Python deps for the HTML/Playwright orchestrator, auto-installed into the
+# repo-local .venv on first run.
+PyYAML
+srt
+edge-tts
+playwright

@@ -1,0 +1,101 @@
+/* Engineering-studio palette + base layout — mirrors the Manim backend's
+   scene _common.py so the two backends share a look. CSS flexbox does the
+   layout, so text wraps and flows automatically (no overflow bookkeeping). */
+
+@font-face { font-family: 'Noto Sans'; font-weight: 400; src: url('./assets/fonts/NotoSans-Regular.ttf'); }
+@font-face { font-family: 'Noto Sans'; font-weight: 500; src: url('./assets/fonts/NotoSans-Medium.ttf'); }
+@font-face { font-family: 'Noto Sans'; font-weight: 600; src: url('./assets/fonts/NotoSans-SemiBold.ttf'); }
+@font-face { font-family: 'Noto Sans'; font-weight: 700; src: url('./assets/fonts/NotoSans-Bold.ttf'); }
+@font-face { font-family: 'JetBrains Mono NL'; font-weight: 400; src: url('./assets/fonts/JetBrainsMonoNL-Regular.ttf'); }
+@font-face { font-family: 'JetBrains Mono NL'; font-weight: 500; src: url('./assets/fonts/JetBrainsMonoNL-Medium.ttf'); }
+
+:root {
+  --primary: #173B8F;
+  --accent: #06A6D8;
+  --highlight: #F4B740;
+  --bg: #F6F8FB;
+  --text: #172033;
+  --danger: #C2413A;
+  --ok: #1F9D69;
+  --card-bg: #FFFFFF;
+  --card-shadow: #D7DEE8;
+  --code-bg: #111827;
+  --code-border: #38BDF8;
+  --panel-dark: #0F172A;
+  --muted: #64748B;
+  --grid: #D9E3EE;
+}
+
+html, body { margin: 0; padding: 0; width: 100%; height: 100%; }
+
+#stage {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background-color: var(--bg);
+  background-image:
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 80px 80px;
+  color: var(--text);
+  font-family: 'Noto Sans', system-ui, sans-serif;
+  font-size: 32px;
+  line-height: 1.35;
+}
+
+/* Content column, inset from the edges. Portrait reserves the bottom 2/10 for
+   Reels/Shorts/TikTok captions via padding-bottom. */
+.content {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 28px;
+  padding: 96px 120px;
+  box-sizing: border-box;
+}
+body.portrait .content { padding: 140px 80px calc(20% + 60px); justify-content: flex-start; gap: 36px; }
+
+.title-bar {
+  position: absolute; top: 0; left: 0; right: 0;
+  display: flex; align-items: center; gap: 28px;
+  height: 120px; padding-left: 48px;
+  background: var(--panel-dark); color: #fff;
+  border-left: 10px solid var(--accent);
+}
+body.portrait .title-bar { height: 150px; }
+.title-bar .eyebrow { color: var(--highlight); font-weight: 600; font-size: 24px; letter-spacing: .04em; }
+.title-bar .bar-title { font-weight: 600; font-size: 52px; }
+body.portrait .title-bar .bar-title { font-size: 60px; }
+
+.title { color: var(--primary); font-weight: 700; font-size: 72px; }
+.body-text { color: var(--text); font-weight: 400; font-size: 40px; max-width: 90%; }
+.section-label { color: var(--accent); font-weight: 600; font-size: 30px; letter-spacing: .03em; }
+
+.bullet-list { display: flex; flex-direction: column; gap: 20px; }
+.bullet { display: flex; align-items: flex-start; gap: 18px; }
+.bullet .dot { flex: 0 0 auto; width: 18px; height: 18px; border-radius: 5px; background: var(--highlight); margin-top: 14px; }
+.bullet .txt { font-size: 38px; }
+
+.code-card {
+  background: var(--code-bg); color: #E5E7EB;
+  border: 2px solid var(--code-border); border-radius: 16px;
+  overflow: hidden; max-width: 100%;
+}
+.code-card .code-title { background: var(--panel-dark); color: var(--muted); font-family: 'JetBrains Mono NL', monospace; font-size: 24px; padding: 10px 20px; }
+.code-card pre { margin: 0; padding: 26px; font-family: 'JetBrains Mono NL', monospace; font-size: 30px; line-height: 1.4; white-space: pre; }
+
+/* Mermaid diagram surface (UML / flow / sequence rendered as SVG). */
+.diagram { display: flex; justify-content: center; align-items: center; max-width: 100%; }
+.diagram svg { max-width: 100%; height: auto; }
+
+.row-2 { display: flex; gap: 48px; align-items: stretch; }
+.col { display: flex; flex-direction: column; gap: 16px; }
+
+/* Semantic color helpers */
+.c-danger { color: var(--danger); }   .b-danger { border-color: var(--danger); }
+.c-ok { color: var(--ok); }           .b-ok { border-color: var(--ok); }
+.c-primary { color: var(--primary); }
+.c-accent { color: var(--accent); }
+.c-muted { color: var(--muted); }

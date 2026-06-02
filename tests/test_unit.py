@@ -150,6 +150,41 @@ def test_parse_storyboard_resolves_scene_dirs_relative(g, tmp_path):
     assert sb.scenes_portrait_dir is None
 
 
+# --- narration duration estimate + compress-to-cap -------------------------
+
+
+def test_estimate_seconds(g):
+    assert g._estimate_seconds("one two three four") == pytest.approx(4 / g._ESTIMATE_WPS)
+    assert g._estimate_seconds("") == 0.0
+
+
+def test_fit_narration_to_cap_compresses_when_over(g, tmp_path, monkeypatch):
+    long_id = " ".join(["kata"] * 300)   # 300 words ≈ 150s est. per scene
+    sb = _sb(g, languages=["id"], max_duration=60.0,
+             scenes=[g.Scene("01_a", "A", "s.py", 30, "d", {"id": long_id}),
+                     g.Scene("02_b", "B", "s.py", 30, "d", {"id": long_id})])
+    (tmp_path / "scripts" / "id").mkdir(parents=True)
+    # compress = keep the first N words (deterministic, no AI)
+    monkeypatch.setattr(g, "_compress_narration",
+                        lambda sb_, lang, cur, n: " ".join(cur.split()[:n]))
+    g._fit_narration_to_cap(sb, tmp_path)
+    total = sum(g._estimate_seconds(s.narration["id"]) for s in sb.scenes)
+    assert total <= 60.0                                  # now within the cap
+    # the script files were rewritten to the shorter text
+    assert (tmp_path / "scripts" / "id" / "01_a.txt").read_text().split()[:1] == ["kata"]
+    assert len((tmp_path / "scripts" / "id" / "01_a.txt").read_text().split()) < 300
+
+
+def test_fit_narration_noop_without_max_duration(g, tmp_path, monkeypatch):
+    called = {"n": 0}
+    monkeypatch.setattr(g, "_compress_narration",
+                        lambda *a, **k: called.__setitem__("n", called["n"] + 1) or "x")
+    sb = _sb(g, languages=["id"], max_duration=None,
+             scenes=[g.Scene("01_a", "A", "s.py", 30, "d", {"id": " ".join(["w"] * 999)})])
+    g._fit_narration_to_cap(sb, tmp_path)
+    assert called["n"] == 0   # no cap → never compresses
+
+
 # --- duration spec + max-duration budget -----------------------------------
 
 
@@ -438,6 +473,35 @@ def test_validate_scene_source_syntax_error(g, tmp_path):
     assert "not valid Python" in str(ei.value)
 
 
+# --- render-error extraction (for AI auto-repair) --------------------------
+
+
+def test_extract_render_error_nameerror_with_location(g):
+    out = (
+        "│ /x/scenes_landscape/scene_04_refactor_singleton.py:76 in construct │\n"
+        "│ ❱  76 │   color=OK, fill=CARD_BG_OR())                             │\n"
+        "NameError: name 'CARD_BG_OR' is not defined\n"
+    )
+    msg = g._extract_render_error(out)
+    assert msg.startswith("NameError: name 'CARD_BG_OR' is not defined")
+    assert "scene_04_refactor_singleton.py:76 in construct" in msg
+
+
+def test_extract_render_error_none_on_clean_output(g):
+    assert g._extract_render_error("INFO Rendered Scene\nPlayed 5 animations\n") == ""
+
+
+def test_extract_render_error_prefers_last(g):
+    out = "ValueError: first\n...\nTypeError: second one\n"
+    assert g._extract_render_error(out).startswith("TypeError: second one")
+
+
+def test_extract_render_error_ignores_traceback_header(g):
+    # the literal word "Traceback (most recent call last):" must not be picked
+    out = "Traceback (most recent call last):\nKeyError: 'missing'\n"
+    assert g._extract_render_error(out).startswith("KeyError: 'missing'")
+
+
 # --- prompts ---------------------------------------------------------------
 
 
@@ -451,8 +515,9 @@ def test_build_narration_prompt(g):
     assert "Indonesian" in prompt
     # the existing other-language narration is offered for meaning
     assert "Hello there." in prompt
-    # word target = max(20, duration*2.5)
-    assert str(int(20 * 2.5)) in prompt
+    # word target = max(20, duration*1.9), enforced as a hard limit
+    assert str(int(20 * 1.9)) in prompt
+    assert "HARD LIMIT" in prompt
 
 
 def test_build_scene_prompt_includes_sources_and_narration(g):
@@ -475,6 +540,61 @@ def test_generate_audio_unknown_provider(g, tmp_path):
     sb = _sb(g, tts_provider="festival")
     with pytest.raises(SystemExit):
         g.generate_audio(sb, tmp_path, force=False)
+
+
+# --- edge-tts transient-failure retry --------------------------------------
+
+
+class _Proc:
+    def __init__(self, returncode, stderr=""):
+        self.returncode = returncode
+        self.stderr = stderr
+        self.stdout = ""
+
+
+def test_edge_tts_retries_then_succeeds(g, tmp_path, monkeypatch):
+    calls = {"n": 0}
+
+    def fake_run(cmd, **kw):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            return _Proc(1, "socket.gaierror: Temporary failure in name resolution")
+        return _Proc(0)
+
+    monkeypatch.setattr(g.subprocess, "run", fake_run)
+    monkeypatch.setattr(g.time, "sleep", lambda *_: None)  # no real backoff
+    g._edge_tts_one("v", "hi", tmp_path / "a.mp3", tmp_path / "a.srt", retries=3, wait=0.0)
+    assert calls["n"] == 3  # failed twice (transient), succeeded on the third
+
+
+def test_edge_tts_transient_exhausted_raises_with_hint(g, tmp_path, monkeypatch):
+    monkeypatch.setattr(g.subprocess, "run",
+                        lambda cmd, **kw: _Proc(1, "Cannot connect to host speech.platform.bing.com"))
+    monkeypatch.setattr(g.time, "sleep", lambda *_: None)
+    with pytest.raises(SystemExit) as ei:
+        g._edge_tts_one("v", "hi", tmp_path / "a.mp3", tmp_path / "a.srt", retries=2, wait=0.0)
+    assert "network problem" in str(ei.value)
+
+
+def test_valid_audio_rejects_missing_and_empty(g, tmp_path):
+    assert g._valid_audio(tmp_path / "nope.mp3") is False
+    empty = tmp_path / "empty.mp3"
+    empty.write_bytes(b"")           # the 0-byte file an interrupted TTS leaves
+    assert g._valid_audio(empty) is False
+
+
+def test_edge_tts_nontransient_fails_fast(g, tmp_path, monkeypatch):
+    calls = {"n": 0}
+
+    def fake_run(cmd, **kw):
+        calls["n"] += 1
+        return _Proc(1, "No audio was received. Verify the voice name 'bogus'.")
+
+    monkeypatch.setattr(g.subprocess, "run", fake_run)
+    monkeypatch.setattr(g.time, "sleep", lambda *_: None)
+    with pytest.raises(SystemExit):
+        g._edge_tts_one("bogus", "hi", tmp_path / "a.mp3", tmp_path / "a.srt", retries=3, wait=0.0)
+    assert calls["n"] == 1  # a non-network error is not retried
 
 
 def test_generate_audio_routes_edge(g, tmp_path, monkeypatch):
