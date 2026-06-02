@@ -374,6 +374,7 @@ sync with it):
 | 2 | **SAFE-AREA** (portrait) | content dips below `SHORTS_SAFE_BOTTOM` (bottom 2/10 reserved for captions) | ✅ | ✅ lift above the line |
 | 3 | **CONTAINMENT** | text/code spills outside its own panel/box | — | ✅ shrink content to its panel |
 | 4 | **OVERLAP** | two text mobjects **or** two content blocks (card/panel/callout) overlap by more than half the smaller one's area (ancestor/descendant pairs ignored) | ✅ | ❌ fixed via `strict` + AI repair |
+| 5 | **INTRUDE** | text resting over a *filled panel it isn't part of* (e.g. a note line on a card's bottom padding) — caught even when no glyphs collide and the overlap is well under half a block | ✅ | ❌ fixed via `strict` + AI repair |
 
 Not auto-checked: **semantic** problems such as an arrow pointing the wrong
 direction. Geometry can't know the intended direction, so those are fixed at

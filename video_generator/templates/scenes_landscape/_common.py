@@ -119,6 +119,9 @@ MarkupText.__init__ = _patched_markup_init
 #                    detect: —     auto-fix(fit): yes  (shrink content to panel)
 #   4. OVERLAP     text-vs-text and block-vs-block collisions
 #                    detect: yes   auto-fix(fit): no   (fix via strict + AI repair)
+#   5. INTRUDE     text resting over a filled panel it isn't part of (e.g. a
+#                  note line on a card's bottom padding)
+#                    detect: yes   auto-fix(fit): no   (fix via strict + AI repair)
 # Semantic problems (e.g. an arrow pointing the wrong way) are intentionally NOT
 # auto-checked here — geometry can't know intent; those are fixed at authoring /
 # AI-generation time. Detection runs after every play AND at end of render, so
@@ -199,8 +202,30 @@ def _content_units(scene):
     return out
 
 
+def _filled_panels(scene):
+    """Opaque rectangle panels (a card / box background a viewer can't see
+    through), excluding full-bleed bars/backgrounds. Foreign text drawn over one
+    of these visually collides even if it only touches the panel's padding."""
+    fw, fh = config.frame_width, config.frame_height
+    out, ids = [], set()
+    for top in scene.mobjects:
+        for m in top.get_family():
+            if isinstance(m, (Rectangle, RoundedRectangle)) and id(m) not in ids:
+                try:
+                    op = float(m.get_fill_opacity())
+                except Exception:
+                    op = 0.0
+                w, h = m.width, m.height
+                if op >= 0.5 and w > 0.4 and h > 0.4 and not (
+                    w >= 0.97 * fw or h >= 0.97 * fh
+                ):
+                    ids.add(id(m))
+                    out.append(m)
+    return out
+
+
 def _detect_layout_issues(scene, overlap_frac=0.5, eps=0.05):
-    """Pure detector: return the list of layout-violation strings (no logging,
+    """Pure detector: return the list of violation strings (no logging,
     no raising). Shared by the end-of-render check and the during-render pass."""
     fw, fh = config.frame_width, config.frame_height
     texts = _text_mobjects(scene)
@@ -264,6 +289,31 @@ def _detect_layout_issues(scene, overlap_frac=0.5, eps=0.05):
                     f"OVERLAP: block {_text_label(ui)!r} and block {_text_label(uj)!r} "
                     f"overlap ({ov / smaller * 100:.0f}% of the smaller block)"
                 )
+
+    # 5. Text intruding into a filled panel it doesn't belong to — e.g. a note
+    #    line resting on a card's bottom padding. Caught even when no glyphs
+    #    collide (text-text) and the overlap is well under half a block.
+    panels = [(_bbox(p), p) for p in _filled_panels(scene)]
+    for m in texts:
+        tb = _bbox(m)
+        ta = (tb[1] - tb[0]) * (tb[3] - tb[2])
+        if ta <= 1e-6:
+            continue
+        tcx, tcy = (tb[0] + tb[1]) / 2.0, (tb[2] + tb[3]) / 2.0
+        for pb, p in panels:
+            if m in p.get_family() or p in m.get_family():
+                continue
+            # Skip the panel's own content / an intentional overlay: a text
+            # whose centre sits inside the panel isn't "intruding" from outside.
+            if pb[0] <= tcx <= pb[1] and pb[2] <= tcy <= pb[3]:
+                continue
+            ov = _overlap_area(tb, pb)
+            if ov > 0.30 * ta:
+                issues.append(
+                    f"INTRUDE: {_text_label(m)!r} overlaps a panel it isn't part "
+                    f"of ({ov / ta * 100:.0f}% of the text is inside the box)"
+                )
+                break
 
     return issues
 
