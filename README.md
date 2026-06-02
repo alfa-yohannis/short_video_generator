@@ -300,7 +300,8 @@ python3 video_generator/generate_video.py --storyboard SB.md --output OUT --forc
 | `--tts {edge,gemini}` | *(front-matter)* | TTS provider. Overrides `tts_provider:` when set |
 | `--voice NAME` | *(front-matter)* | Override the voice for every language this run |
 | `--gemini-api-key KEY` | *(env / .env)* | Gemini API key |
-| `--check-layout {off,warn,strict}` | `off` | At render time, check each scene's text for overflow/clipping, portrait caption-zone violations, and overlap. `warn` logs; `strict` fails the render |
+| `--check-layout {off,warn,strict,fit}` | `off` | At render time, check each scene's text for overflow/clipping, portrait caption-zone violations, and overlap. `warn` logs; `strict` fails the render; `fit` auto-scales/nudges overflowing text back inside the frame as it renders |
+| `--layout-repair-attempts N` | `2` | With `--check-layout strict`, how many times to ask the AI CLI to fix a scene that fails the check and re-render before giving up (`0` disables AI repair) |
 | `--skip-youtube` | off | Don't generate `youtube/<lang>/youtube.txt` |
 | `--skip-dep-check` | off | Skip the startup dependency validation |
 | `--no-ai-cli-check` | off | Don't enforce AI CLI presence (every narration / scene `.py` pre-filled) |
@@ -372,12 +373,41 @@ python3 video_generator/generate_video.py --storyboard SB.md --output OUT --chec
 
 # Fail the render on the first scene with a violation (good for CI):
 python3 video_generator/generate_video.py --storyboard SB.md --output OUT --check-layout strict
+
+# Auto-fix: scale/nudge overflowing text back inside the frame as it renders:
+python3 video_generator/generate_video.py --storyboard SB.md --output OUT --check-layout fit
 ```
 
 The generator passes the mode to Manim via the `MANIM_CHECK_LAYOUT` env var, so
 a direct `manim` invocation honors it too. The check targets **text**
 (`Text` / `MarkupText`) — the usual culprit — not decorative shapes, which keeps
 false positives low. Default is `off`, so it never changes a normal render.
+
+### Automated fixing
+
+Two complementary repair paths turn a detected violation into a fixed video
+instead of just a report:
+
+- **`fit` (deterministic, in-render).** Because the end-of-render check fires
+  *after* a scene's frames are already drawn, `fit` instead hooks every
+  `self.play` / `self.wait` and, just before those frames render, shrinks any
+  too-large text and translates clipped text back inside the frame (and, in
+  portrait, above `SHORTS_SAFE_BOTTOM`). Geometry only — no AI, no extra render
+  passes — so it's fast, but it can change a label's size or position from what
+  the scene intended.
+- **AI re-repair loop (with `strict`).** When `--check-layout strict` aborts a
+  scene, the generator feeds that scene's source **and the exact violations**
+  back to the AI CLI, writes the corrected `.py`, and re-renders — up to
+  `--layout-repair-attempts` times (default 2) before giving up. This preserves
+  the intended design better than `fit` but costs an AI call and a re-render per
+  attempt. Set `--layout-repair-attempts 0` to disable it and fail fast.
+
+Use `fit` for a quick, hands-off pass; use `strict` (with repair) when you want
+the AI to redesign an offending scene rather than mechanically squeeze it.
+
+> The materialised `_common.py` under each build's `scenes_<orient>/` is
+> refreshed from the bundled template whenever it changes, so an existing
+> output directory picks up the auto-fit logic on the next run without `--force`.
 
 ---
 

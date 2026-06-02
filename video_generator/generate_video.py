@@ -441,12 +441,11 @@ def run_ai_cli(cli: str, prompt: str) -> str:
             "--permission-mode", "bypassPermissions",
             "--allow-dangerously-skip-permissions",
             "--disable-slash-commands",
-            "--exclude-dynamic-system-prompt-sections",
         ]
     elif cli == "codex":
         # --sandbox read-only stops codex from writing the file itself (same
         # agentic pitfall as claude above); we want the content on stdout.
-        cmd = [binary, "exec", "--quiet", "--sandbox", "read-only"]
+        cmd = [binary, "exec", "--sandbox", "read-only"]
     else:
         raise SystemExit(f"Unknown ai_cli '{cli}'. Use 'claude' or 'codex'.")
     proc = subprocess.run(
@@ -536,7 +535,13 @@ def _materialize_scenes_dir(sb: Storyboard, output: Path, orient: str) -> Path:
     target.mkdir(parents=True, exist_ok=True)
     template_common = TEMPLATES_DIR / f"scenes_{orient}" / "_common.py"
     target_common = target / "_common.py"
-    if not target_common.exists() and template_common.exists():
+    # _common.py is generator-owned (only materialised here, never hand-edited
+    # in the default flow), so refresh it whenever the bundled template differs
+    # — otherwise older builds silently miss fixes like the layout auto-fit.
+    if template_common.exists() and (
+        not target_common.exists()
+        or target_common.read_bytes() != template_common.read_bytes()
+    ):
         shutil.copy2(template_common, target_common)
     # _common.py also expects assets/fonts/ next to the scenes dir (ROOT_DIR/assets/fonts).
     assets_target = output / "assets"
@@ -989,8 +994,76 @@ def _generate_audio_gemini(sb: Storyboard, output: Path, force: bool,
             log(f"    ↳ {lang}/{sc.basename}.mp3 in {time.monotonic() - _t:.1f}s")
 
 
+def _extract_layout_issues(text: str) -> str:
+    """Pull the layout-violation summary out of a failed render's output.
+
+    The scene `_common.py` raises `LayoutError: [layout] N issue(s) in Cls:
+    OVERFLOW: …; OVERLAP: …` in strict mode and also prints `  - <issue>`
+    bullet lines. Prefer the single-line LayoutError message; fall back to the
+    bullets. Returns "" when the failure wasn't a layout violation."""
+    lines = text.splitlines()
+    for line in lines:
+        s = line.strip()
+        if s.startswith("LayoutError:"):
+            return s[len("LayoutError:"):].strip()
+    bullets = [ln.strip()[2:].strip() for ln in lines if ln.strip().startswith("- ")]
+    if bullets and any("[layout]" in ln for ln in lines):
+        return "; ".join(bullets)
+    return ""
+
+
+def _build_layout_repair_prompt(sb: Storyboard, sc: Scene, orient: str,
+                                skeleton: str, common_src: str,
+                                current_src: str, issues: str) -> str:
+    safe_note = ""
+    if orient == "portrait":
+        safe_note = (" and entirely above SHORTS_SAFE_BOTTOM = -4.8 (the bottom "
+                     "2/10 reserved for caption overlays)")
+    base = _build_scene_prompt(sb, sc, orient, skeleton, common_src)
+    return base + f"""
+
+LAYOUT REPAIR — IMPORTANT:
+A previous version of this exact scene FAILED an automated layout check with:
+{issues}
+
+Here is that failing scene source:
+```python
+{current_src}
+```
+
+Produce a corrected COMPLETE scene file that preserves the same content, timing
+(`TARGET_DURATION`, `run_time` values, final wait) and instructional intent, but
+guarantees every visible text mobject stays fully inside the frame{safe_note},
+with no two text labels overlapping by more than half the smaller one. Fix it by
+repositioning, reducing font `size=`, wrapping long strings onto multiple lines,
+arranging with VGroup(...).arrange(...), or (portrait) fit_to_shorts_area(...).
+Return ONLY the corrected Python file, no fences, no commentary.
+"""
+
+
+def _repair_scene_layout(sb: Storyboard, sc: Scene, orient: str,
+                         scene_path: Path, issues: str) -> None:
+    """Ask the AI CLI to fix a scene that failed the layout check, validate the
+    reply, and overwrite the scene file in place."""
+    scenes_dir = scene_path.parent
+    common_path = scenes_dir / "_common.py"
+    common_src = common_path.read_text(encoding="utf-8") if common_path.exists() else ""
+    skeleton_path = TEMPLATES_DIR / "scene_skeleton.py"
+    skeleton = skeleton_path.read_text(encoding="utf-8") if skeleton_path.exists() else ""
+    current_src = scene_path.read_text(encoding="utf-8")
+    prompt = _build_layout_repair_prompt(
+        sb, sc, orient, skeleton, common_src, current_src, issues
+    )
+    new_src = _strip_code_fences(run_ai_cli(sb.ai_cli, prompt))
+    if not new_src.strip():
+        raise SystemExit(f"AI returned empty source repairing {scene_path}")
+    new_src = _escape_unsafe_ampersands(new_src)
+    _validate_scene_source(scene_path, new_src)
+    scene_path.write_text(new_src.rstrip() + "\n", encoding="utf-8")
+
+
 def render_manim(sb: Storyboard, output: Path, lang: str, orient: str, force: bool,
-                 check_layout: str = "off") -> None:
+                 check_layout: str = "off", repair_attempts: int = 0) -> None:
     scenes_dir = sb.scenes_landscape_dir if orient == "landscape" else sb.scenes_portrait_dir
     if not scenes_dir.exists():
         raise SystemExit(f"scenes_{orient}_dir does not exist: {scenes_dir}")
@@ -1025,7 +1098,32 @@ def render_manim(sb: Storyboard, output: Path, lang: str, orient: str, force: bo
         ]
         log(f"  render {lang}/{orient}/{sc.basename}::{sc.classname}…")
         _t = time.monotonic()
-        subprocess.run(cmd, check=True, env=env, cwd=str(scenes_dir))
+        # In strict mode a layout violation aborts the render. When AI repair is
+        # enabled, feed the violation back to the CLI, regenerate the scene, and
+        # re-render — up to repair_attempts times before giving up.
+        max_repairs = repair_attempts if check_layout == "strict" else 0
+        for attempt in range(max_repairs + 1):
+            proc = subprocess.run(cmd, env=env, cwd=str(scenes_dir),
+                                  capture_output=True, text=True)
+            if proc.stdout:
+                sys.stdout.write(proc.stdout)
+            if proc.stderr:
+                sys.stderr.write(proc.stderr)
+            if proc.returncode == 0:
+                break
+            issues = _extract_layout_issues((proc.stdout or "") + (proc.stderr or ""))
+            can_repair = (issues and attempt < max_repairs
+                          and sb.ai_cli not in ("", "none", None))
+            if not can_repair:
+                if issues and attempt >= max_repairs > 0:
+                    raise SystemExit(
+                        f"Layout check still failing for {orient}/{sc.basename} "
+                        f"after {max_repairs} AI repair attempt(s): {issues}"
+                    )
+                raise subprocess.CalledProcessError(proc.returncode, cmd)
+            log(f"    layout violation, repairing {orient}/{sc.file} via "
+                f"{sb.ai_cli} (attempt {attempt + 1}/{max_repairs})… {issues}")
+            _repair_scene_layout(sb, sc, orient, scene_path, issues)
         log(f"    ↳ {lang}/{orient}/{sc.basename}.mp4 in {time.monotonic() - _t:.1f}s")
 
         stem = scene_path.stem
@@ -1436,7 +1534,8 @@ def cmd_build(args: argparse.Namespace) -> None:
         for lang in sb.languages:
             for orient in sb.orientations:
                 render_manim(sb, output, lang, orient, args.force,
-                             check_layout=args.check_layout)
+                             check_layout=args.check_layout,
+                             repair_attempts=args.layout_repair_attempts)
         done()
     if args.stage in ("all", "mux"):
         done = _stage("[5/8] mux clips (video + audio)")
@@ -1505,10 +1604,18 @@ def main() -> None:
              "repo root, then 'gemini_api_key:' in the storyboard front-matter.",
     )
     ap.add_argument(
-        "--check-layout", choices=["off", "warn", "strict"], default="off",
+        "--check-layout", choices=["off", "warn", "strict", "fit"], default="off",
         help="At render time, check each scene's text for off-frame overflow / "
              "clipping, portrait caption-zone violations, and text overlap. "
-             "'warn' logs issues; 'strict' fails the render (default: off).",
+             "'warn' logs issues; 'strict' fails the render; 'fit' auto-scales / "
+             "nudges overflowing text back inside the frame as it renders "
+             "(default: off).",
+    )
+    ap.add_argument(
+        "--layout-repair-attempts", type=int, default=2,
+        help="With --check-layout strict, how many times to ask the AI CLI to "
+             "fix a scene that fails the layout check and re-render it before "
+             "giving up (default: 2; 0 disables AI repair).",
     )
     ap.add_argument(
         "--skip-youtube", action="store_true",

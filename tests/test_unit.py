@@ -323,6 +323,36 @@ def test_strip_code_fences_keeps_clean_source(g):
     assert g._strip_code_fences(src) == src
 
 
+def test_extract_layout_issues_from_layout_error(g):
+    out = (
+        "[layout] 1 issue(s) in RefactorSingleton:\n"
+        "  - OVERFLOW: 'Same object!' extends past the frame\n"
+        "LayoutError: [layout] 1 issue(s) in RefactorSingleton: "
+        "OVERFLOW: 'Same object!' extends past the frame\n"
+    )
+    issues = g._extract_layout_issues(out)
+    assert issues.startswith("[layout] 1 issue(s) in RefactorSingleton:")
+    assert "OVERFLOW" in issues
+
+
+def test_extract_layout_issues_falls_back_to_bullets(g):
+    # warn-style output: bullets under a [layout] header, no LayoutError line.
+    out = (
+        "[layout] 2 issue(s) in S:\n"
+        "  - OVERFLOW: 'A' extends past the frame\n"
+        "  - OVERLAP: 'A' and 'B' overlap (80% of the smaller box)\n"
+    )
+    issues = g._extract_layout_issues(out)
+    assert issues == ("OVERFLOW: 'A' extends past the frame; "
+                      "OVERLAP: 'A' and 'B' overlap (80% of the smaller box)")
+
+
+def test_extract_layout_issues_ignores_non_layout_failures(g):
+    # A plain Manim/Python traceback is not a layout violation -> no repair.
+    out = "Traceback (most recent call last):\n  File ...\nValueError: boom\n"
+    assert g._extract_layout_issues(out) == ""
+
+
 # --- AST validation --------------------------------------------------------
 
 

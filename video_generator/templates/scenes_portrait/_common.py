@@ -217,7 +217,77 @@ def check_layout(scene, mode=None, overlap_frac=0.5, eps=0.05):
     return issues
 
 
+# --- Auto-fit (opt-in via MANIM_CHECK_LAYOUT=fit) -------------------------
+# In "fit" mode we don't just report overflow — we readjust the offending text
+# so its bounding box lands back inside the frame (and, in portrait, above the
+# caption safe zone) *before* the frames that show it are rendered. The fit is
+# geometry only: shrink a too-big label, then translate a clipped one inward.
+# It runs right before every self.play / self.wait (the calls that emit frames)
+# so the correction is baked into the output — unlike the end-of-render check,
+# which fires too late to change what was already drawn.
+
+def _fit_text_mobject(m, eps=0.08):
+    """Scale + translate one text mobject so its bounding box sits inside the
+    frame and above SHORTS_SAFE_BOTTOM (when defined). Returns True if changed."""
+    fw, fh = config.frame_width, config.frame_height
+    safe_bottom = globals().get("SHORTS_SAFE_BOTTOM")
+    left_lim, right_lim = -fw / 2 + eps, fw / 2 - eps
+    top_lim = fh / 2 - eps
+    bot_lim = (safe_bottom if safe_bottom is not None else -fh / 2) + eps
+    if m.width <= 1e-6 or m.height <= 1e-6:
+        return False
+    changed = False
+
+    # 1. Shrink to fit the usable width/height band.
+    factor = min(1.0, (right_lim - left_lim) / m.width, (top_lim - bot_lim) / m.height)
+    if factor < 1.0 - 1e-3:
+        m.scale(factor)
+        changed = True
+
+    # 2. Translate the (possibly shrunk) box inside the limits.
+    x0, x1, y0, y1 = _bbox(m)
+    dx = (right_lim - x1) if x1 > right_lim else 0.0
+    if x0 + dx < left_lim:
+        dx += left_lim - (x0 + dx)
+    dy = (top_lim - y1) if y1 > top_lim else 0.0
+    if y0 + dy < bot_lim:
+        dy += bot_lim - (y0 + dy)
+    if abs(dx) > 1e-6 or abs(dy) > 1e-6:
+        m.shift(RIGHT * dx + UP * dy)
+        changed = True
+    return changed
+
+
+def _animation_mobjects(animations):
+    """Mobjects an about-to-play animation touches (handles nested groups)."""
+    out, stack = [], list(animations)
+    while stack:
+        a = stack.pop()
+        mob = getattr(a, "mobject", None)
+        if mob is not None:
+            out.append(mob)
+        subs = getattr(a, "animations", None)
+        if subs:
+            stack.extend(subs)
+    return out
+
+
+def _autofit_scene(scene, extra=()):
+    """Fit every visible text mobject currently on (or entering) the scene."""
+    if _layout_mode() != "fit":
+        return
+    seen = set()
+    for top in list(scene.mobjects) + list(extra):
+        for m in top.get_family():
+            if isinstance(m, (Text, MarkupText)) and id(m) not in seen:
+                if m.width > 1e-3 and m.height > 1e-3:
+                    seen.add(id(m))
+                    _fit_text_mobject(m)
+
+
 _orig_scene_render = Scene.render
+_orig_scene_play = Scene.play
+_orig_scene_wait = Scene.wait
 
 
 def _patched_scene_render(self, *args, **kwargs):
@@ -226,7 +296,19 @@ def _patched_scene_render(self, *args, **kwargs):
     return result
 
 
+def _patched_scene_play(self, *animations, **kwargs):
+    _autofit_scene(self, extra=_animation_mobjects(animations))
+    return _orig_scene_play(self, *animations, **kwargs)
+
+
+def _patched_scene_wait(self, *args, **kwargs):
+    _autofit_scene(self)
+    return _orig_scene_wait(self, *args, **kwargs)
+
+
 Scene.render = _patched_scene_render
+Scene.play = _patched_scene_play
+Scene.wait = _patched_scene_wait
 
 
 # --- Typography helpers (slightly bigger for portrait) -------------------
