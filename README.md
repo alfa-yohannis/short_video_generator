@@ -28,7 +28,8 @@ and the TTS engine are swappable.
 - **Bilingual** — Indonesian + English narration, audio, and subtitles in one run.
 - **Swappable narrator** — Claude Code (default, reuses your `claude` session, no
   API key) or the Codex CLI (`--ai-cli codex`). Used to write missing narration
-  *and* missing Manim scene files from each scene's description.
+  *and* missing Manim scene files from each scene's description. Claude runs Opus
+  at `high` reasoning effort by default — raise it with `--effort max`.
 - **Swappable TTS** — free Microsoft **Edge TTS** (default, no key, exact subtitle
   timing, default voice `id-ID-ArdiNeural`) or Google **Gemini TTS**
   (`--tts gemini`, nicer voices, needs an API key, estimated subtitle timing,
@@ -320,15 +321,19 @@ python3 video_generator/generate_video.py --storyboard SB.md --output OUT --forc
 | --- | --- | --- |
 | `--storyboard PATH` | *(required)* | Storyboard markdown file |
 | `--output DIR` | *(required)* | Output directory (all intermediates go here) |
-| `--stage STAGE` | `all` | One of `scripts`, `audio`, `scenes`, `render`, `mux`, `concat`, `srt`, or `all` |
+| `--stage STAGE` | `all` | One of `scripts`, `audio`, `scenes`, `render`, `mux`, `concat`, `srt`, `youtube`, or `all` |
 | `--only SCENE…` | *(all)* | Restrict to a subset of scene basenames |
 | `--force` | off | Wipe generator-owned subdirs and rebuild from a clean slate |
 | `--ai-cli {claude,codex}` | `claude` | AI CLI for missing narration / scene `.py`. Overrides `ai_cli:` |
+| `--effort {low,medium,high,xhigh,max}` | `high` | Reasoning effort for the **Claude** AI CLI (pass `max` for the top tier). Ignored when `--ai-cli codex` |
 | `--tts {edge,gemini}` | *(front-matter)* | TTS provider. Overrides `tts_provider:` when set |
 | `--voice NAME` | *(front-matter)* | Override the voice for every language this run |
 | `--gemini-api-key KEY` | *(env / .env)* | Gemini API key |
 | `--check-layout {off,warn,strict,fit}` | `off` | At render time, check each scene's text for overflow/clipping, portrait caption-zone violations, and overlap. `warn` logs; `strict` fails the render; `fit` auto-scales/nudges overflowing text back inside the frame as it renders |
-| `--layout-repair-attempts N` | `2` | With `--check-layout strict`, how many times to ask the AI CLI to fix a scene that fails the check and re-render before giving up (`0` disables AI repair) |
+| `--repair-attempts N` (alias `--layout-repair-attempts`) | `2` | How many times to ask the AI CLI to fix a scene that fails to render — or fails `--check-layout strict` — then re-render, before giving up (`0` disables AI repair) |
+| `--validate-scenes` | off | After generating each scene, render-check it (strict) and auto-refine it until it passes, *before* the real render |
+| `--validate-attempts N` | `10` | With `--validate-scenes`, max refine attempts per failing scene before giving up |
+| `--refine-storyboard` | off | Before building, let the AI rewrite an over-dense storyboard (trim/split/rebalance within the duration cap). Written to `<output>/storyboard.refined.md` — your original is untouched; if the plan changes, everything regenerates |
 | `--skip-youtube` | off | Don't generate `youtube/<lang>/youtube.txt` |
 | `--skip-dep-check` | off | Skip the startup dependency validation |
 | `--no-ai-cli-check` | off | Don't enforce AI CLI presence (every narration / scene `.py` pre-filled) |
@@ -364,10 +369,13 @@ Each AI-generated scene file is post-processed before it's written:
 
 ### Claude authentication
 
-The generator invokes `claude` with `-p --permission-mode bypassPermissions
---allow-dangerously-skip-permissions --disable-slash-commands
---exclude-dynamic-system-prompt-sections`. It deliberately **does not** pass
-`--bare`, so the OAuth session from `claude /login` is honored.
+The generator invokes `claude` with `-p --model <model> --effort <effort>
+--tools '' --permission-mode bypassPermissions
+--allow-dangerously-skip-permissions --disable-slash-commands` (model defaults
+to `claude-opus-4-8`, effort to `high` — raise it with `--effort max`; `--tools
+''` disables tools so Claude returns the file text instead of writing it
+itself). It deliberately **does not** pass `--bare`, so the OAuth session from
+`claude /login` is honored.
 
 Authenticate either way:
 
@@ -444,9 +452,9 @@ instead of just a report:
 - **AI re-repair loop (with `strict`).** When `--check-layout strict` aborts a
   scene, the generator feeds that scene's source **and the exact violations**
   back to the AI CLI, writes the corrected `.py`, and re-renders — up to
-  `--layout-repair-attempts` times (default 2) before giving up. This preserves
+  `--repair-attempts` times (default 2) before giving up. This preserves
   the intended design better than `fit` but costs an AI call and a re-render per
-  attempt. Set `--layout-repair-attempts 0` to disable it and fail fast.
+  attempt. Set `--repair-attempts 0` to disable it and fail fast.
 
 Use `fit` for a quick, hands-off pass; use `strict` (with repair) when you want
 the AI to redesign an offending scene rather than mechanically squeeze it.
