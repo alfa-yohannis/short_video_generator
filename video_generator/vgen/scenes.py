@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Optional, Tuple
 
 from . import config
 from .ai_client import AiClient
+from .density import SceneTooDenseError, is_too_dense
 from .models import Scene, Storyboard
 from .progress import progress
 from .text_utils import (
@@ -129,11 +130,15 @@ class SceneSynthesizer:
 
         Renders the scene (low quality, strict layout check) for each language;
         on the first failure it asks the AI to fix the scene and checks again,
-        up to ``validate_attempts`` times. No-op unless a validator is wired in.
+        up to ``validate_attempts`` times. If a *density* failure (the content
+        won't fit, not a stray label) survives ``REPAIRS_BEFORE_SPLIT`` repairs,
+        it raises :class:`SceneTooDenseError` so the build can split the scene in
+        the storyboard. No-op unless a validator is wired in.
         """
         if self.validator is None or self.validate_attempts <= 0:
             return
         scenes_dir = scene_path.parent
+        density_fails = 0
         for attempt in range(1, self.validate_attempts + 1):
             failure = None
             for lang in storyboard.languages:
@@ -146,6 +151,12 @@ class SceneSynthesizer:
                 progress.log(f"    ✓ {orient}/{scene.basename} passes the layout check")
                 return
             lang, problem, is_layout = failure
+            # Too-dense escalation: when content genuinely won't fit, repairing in
+            # place is futile — after a few tries, hand it off to be split.
+            if is_layout and is_too_dense(problem, config.DENSITY_MIN_SCALE):
+                if density_fails >= config.REPAIRS_BEFORE_SPLIT:
+                    raise SceneTooDenseError(scene, orient, problem)
+                density_fails += 1
             if attempt >= self.validate_attempts:
                 raise SystemExit(
                     f"{orient}/{scene.basename} still violates the checks after "

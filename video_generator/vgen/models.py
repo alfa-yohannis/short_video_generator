@@ -73,3 +73,46 @@ class Storyboard:
         if orientation == "landscape":
             return self.scenes_landscape_dir
         return self.scenes_portrait_dir
+
+    def to_markdown(self) -> str:
+        """Serialize back to the storyboard markdown format.
+
+        Round-trips through :class:`~vgen.storyboard.StoryboardParser` — used by
+        the refiner so it can show the AI the *current* storyboard (after any
+        earlier edit) without depending on the original file on disk.
+        """
+        lines = [
+            "---",
+            f"title: {self.title}",
+            f"languages: [{', '.join(self.languages)}]",
+            f"orientations: [{', '.join(self.orientations)}]",
+        ]
+        if self.voices:
+            lines.append("voices:")
+            lines += [f"  {lang}: {voice}" for lang, voice in self.voices.items()]
+        lines.append(f"tts_provider: {self.tts_provider}")
+        lines.append(f"gemini_model: {self.gemini_model}")
+        if self.gemini_api_key:
+            lines.append(f"gemini_api_key: {self.gemini_api_key}")
+        lines.append(f"ai_cli: {self.ai_cli}")
+        lines.append(f"fps: {self.fps}")
+        w, h = self.resolution_landscape
+        lines.append(f"resolution_landscape: [{w}, {h}]")
+        if self.max_duration is not None:
+            lines.append(f"max_duration: {self.max_duration:g}")
+        lines.append("---")
+        lines.append("")
+        if self.project_brief:
+            lines += [self.project_brief, ""]
+        for scene in self.scenes:
+            lines.append(f"## Scene: {scene.basename} / {scene.classname}")
+            lines.append("")
+            lines.append(f"**file:** {scene.file}")
+            lines.append(f"**fallback_duration:** {scene.fallback_duration:g}")
+            lines.append("")
+            if scene.description:
+                lines += ["### description", scene.description, ""]
+            for lang, text in scene.narration.items():
+                if text.strip():
+                    lines += [f"### narration.{lang}", text, ""]
+        return "\n".join(lines).rstrip() + "\n"

@@ -23,6 +23,7 @@ Services (one responsibility each; take their collaborators by injection)
     refine.py        StoryboardRefiner            — rewrite an over-dense storyboard
     narration.py     NarrationWriter              — write the scripts
     scenes.py        SceneSynthesizer             — generate/repair scene .py
+    density.py       is_too_dense + SceneTooDenseError — "split this scene" signal
     duration.py      DurationFitter               — keep under max_duration
     renderer.py      ManimRenderer                — scenes -> silent clips
     assembly.py      ClipAssembler                — mux / concat / merge srt

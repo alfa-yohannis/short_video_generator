@@ -74,6 +74,18 @@ DEFAULT_DURATION_CAP_SECONDS = 180.0
 # slightly long (safer for staying under a max-duration cap).
 ESTIMATE_WORDS_PER_SECOND = 2.0
 
+# --- Too-dense-scene escalation (split a scene into smaller ones) ----------
+# Used when --validate-scenes is on. A scene is "too dense" when fitting it
+# would require shrinking content below DENSITY_MIN_SCALE (i.e. unreadable) OR
+# it shows >= 2 overflow/containment items at once. Such a scene is split in
+# the storyboard after REPAIRS_BEFORE_SPLIT in-place repairs fail — but never
+# into pieces shorter than MIN_CHILD_DURATION_SECONDS, and never more than
+# MAX_SPLIT_ROUNDS times.
+REPAIRS_BEFORE_SPLIT = 3
+DENSITY_MIN_SCALE = 0.60
+MAX_SPLIT_ROUNDS = 2
+MIN_CHILD_DURATION_SECONDS = 7.0
+
 # --- YouTube field limits --------------------------------------------------
 YT_TITLE_MAX = 100
 YT_DESC_MAX = 5000

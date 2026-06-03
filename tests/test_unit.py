@@ -21,7 +21,11 @@ import vgen.tts as tts_mod
 from vgen.duration import DurationFitter, count_words, estimate_seconds
 from vgen.models import Scene
 from vgen.narration import NarrationWriter
-from vgen.pipeline import BuildOptions, apply_cli_overrides, _scenes_changed
+from vgen import density
+from vgen.density import SceneTooDenseError, is_too_dense, min_fit_scale, overflow_count
+from vgen.pipeline import (
+    BuildOptions, apply_cli_overrides, _filtered, _guard_split, _run_with_splits, _scenes_changed,
+)
 from vgen.refine import StoryboardRefiner
 from vgen.scenes import SceneSynthesizer
 from vgen.storyboard import StoryboardParser, parse_duration_spec
@@ -855,10 +859,13 @@ def test_validate_and_fix_noop_without_validator(tmp_path):
 from conftest import storyboard_text  # noqa: E402  (kept near its users)
 
 
+def _input_storyboard(*durations):
+    return make_storyboard(scenes=[
+        Scene(f"{i:02d}_s", f"S{i}", f"scene_{i:02d}_s.py", d, "d", {})
+        for i, d in enumerate(durations, start=1)])
+
+
 def test_refiner_returns_within_cap_storyboard(tmp_path):
-    src = write_storyboard(tmp_path / "sb.md",
-                           scenes=[{"basename": "01_a", "classname": "A", "duration": 90},
-                                   {"basename": "02_b", "classname": "B", "duration": 90}])
     # The AI "splits/trims" into three lighter scenes that still total <= 180s.
     revised = storyboard_text(scenes=[
         {"basename": "01_a", "classname": "A", "duration": 60},
@@ -866,39 +873,33 @@ def test_refiner_returns_within_cap_storyboard(tmp_path):
         {"basename": "03_c", "classname": "C", "duration": 50},
     ])
     refiner = StoryboardRefiner(FakeAiClient(revised))
-    sb = refiner.refine(src, tmp_path, cap_seconds=180.0)
+    sb = refiner.refine(_input_storyboard(90, 90), tmp_path, cap_seconds=180.0)
     assert [s.basename for s in sb.scenes] == ["01_a", "02_b", "03_c"]
     assert sb.duration_budget() <= 180.0
     assert (tmp_path / "storyboard.refined.md").exists()   # revision saved, original untouched
 
 
 def test_refiner_retries_when_over_cap(tmp_path):
-    src = write_storyboard(tmp_path / "sb.md",
-                           scenes=[{"basename": "01_a", "classname": "A", "duration": 90}])
     over = storyboard_text(scenes=[{"basename": "01_a", "classname": "A", "duration": 200}])  # > 180
     ok = storyboard_text(scenes=[{"basename": "01_a", "classname": "A", "duration": 120}])
     replies = iter([over, ok])
-
     refiner = StoryboardRefiner(FakeAiClient(lambda _p: next(replies)))
-    sb = refiner.refine(src, tmp_path, cap_seconds=180.0, attempts=3)
+    sb = refiner.refine(_input_storyboard(90), tmp_path, cap_seconds=180.0, attempts=3)
     assert sb.duration_budget() == 120.0
 
 
 def test_refiner_gives_up_after_attempts(tmp_path):
-    src = write_storyboard(tmp_path / "sb.md",
-                           scenes=[{"basename": "01_a", "classname": "A", "duration": 90}])
     always_over = storyboard_text(scenes=[{"basename": "01_a", "classname": "A", "duration": 300}])
     refiner = StoryboardRefiner(FakeAiClient(always_over))
     with pytest.raises(SystemExit) as ei:
-        refiner.refine(src, tmp_path, cap_seconds=180.0, attempts=2)
+        refiner.refine(_input_storyboard(90), tmp_path, cap_seconds=180.0, attempts=2)
     assert "within the 180s cap" in str(ei.value)
 
 
 def test_refiner_strips_fence_and_prose(tmp_path):
-    src = write_storyboard(tmp_path / "sb.md")
     body = storyboard_text(scenes=[{"basename": "01_a", "classname": "A", "duration": 30}])
     reply = "Sure, here is the revised storyboard:\n```markdown\n" + body + "\n```\nHope it helps!"
-    sb = StoryboardRefiner(FakeAiClient(reply)).refine(src, tmp_path, cap_seconds=180.0)
+    sb = StoryboardRefiner(FakeAiClient(reply)).refine(_input_storyboard(90), tmp_path, cap_seconds=180.0)
     assert [s.basename for s in sb.scenes] == ["01_a"]
 
 
@@ -908,3 +909,183 @@ def test_scenes_changed_detects_plan_edits():
     different = make_storyboard(scenes=[Scene("01_a", "A", "s.py", 20, "desc", {})])  # duration
     assert _scenes_changed(a, same) is False
     assert _scenes_changed(a, different) is True
+
+
+# --- density signal: when is a failing scene "too dense"? ------------------
+
+
+def _overflow(span_x, span_y=6.0, fw=14.2, fh=8.0):
+    return (f"OVERFLOW: 'x' extends past the frame "
+            f"(x[{-span_x/2:.2f},{span_x/2:.2f}] y[{-span_y/2:.2f},{span_y/2:.2f}], "
+            f"frame {fw}x{fh})")
+
+
+def test_overflow_count():
+    assert overflow_count(_overflow(20)) == 1
+    assert overflow_count(_overflow(20) + "; " + _overflow(18)) == 2
+    assert overflow_count("OVERLAP: a and b") == 0
+
+
+def test_min_fit_scale():
+    # a 20-wide item in a 14.2 frame needs 14.2/20 ≈ 0.71
+    assert min_fit_scale(_overflow(20)) == pytest.approx(14.2 / 20, abs=0.01)
+    assert min_fit_scale("OVERLAP: no bbox here") is None
+
+
+def test_is_too_dense_by_scale():
+    # 24 wide in a 14.2 frame -> 0.59 < 0.60 -> too dense
+    assert is_too_dense(_overflow(24), 0.60) is True
+    # 20 wide -> 0.71 -> not (by scale), and only one item
+    assert is_too_dense(_overflow(20), 0.60) is False
+
+
+def test_is_too_dense_by_count():
+    assert is_too_dense(_overflow(20) + "; " + _overflow(18), 0.60) is True
+
+
+def test_is_too_dense_negatives():
+    assert is_too_dense("", 0.60) is False
+    assert is_too_dense("OVERLAP: a and b overlap (80% of the smaller box)", 0.60) is False
+
+
+# --- Storyboard.to_markdown round-trips through the parser ------------------
+
+
+def test_storyboard_to_markdown_roundtrips(tmp_path):
+    sb = make_storyboard(
+        title="demo", languages=["id", "en"], voices={"id": "id-ID-ArdiNeural"},
+        tts_provider="edge", max_duration=180.0, project_brief="A brief.",
+        scenes=[Scene("01_a", "A", "scene_01_a.py", 60, "Desc one.", {"id": "Halo.", "en": "Hi."}),
+                Scene("02_b", "B", "scene_02_b.py", 45, "Desc two.", {})])
+    p = tmp_path / "rt.md"
+    p.write_text(sb.to_markdown(), encoding="utf-8")
+    out = StoryboardParser().parse(p)
+    assert out.title == "demo" and out.max_duration == 180.0
+    assert out.voices == {"id": "id-ID-ArdiNeural"}
+    assert [(s.basename, s.classname, s.file, s.fallback_duration, s.description)
+            for s in out.scenes] == [
+        ("01_a", "A", "scene_01_a.py", 60.0, "Desc one."),
+        ("02_b", "B", "scene_02_b.py", 45.0, "Desc two.")]
+    assert out.scenes[0].narration == {"id": "Halo.", "en": "Hi."}
+    assert out.scenes[1].narration == {}
+
+
+# --- escalation: density failures lead to SceneTooDenseError ----------------
+
+
+class _DenseValidator:
+    """Always reports the same too-dense (2-overflow) failure."""
+    def check_scene(self, *args, **kwargs):
+        problem = _overflow(20) + "; " + _overflow(18)
+        return False, problem, True
+
+
+class _OverlapValidator:
+    """Always reports a single, *non-dense* overlap (repairable in place)."""
+    def check_scene(self, *args, **kwargs):
+        return False, "OVERLAP: 'a' and 'b' overlap (80% of the smaller box)", True
+
+
+def _synth(validator, attempts, monkeypatch, repairs):
+    synth = SceneSynthesizer(FakeAiClient("from manim import *\n"),
+                             validator=validator, validate_attempts=attempts)
+    monkeypatch.setattr(synth, "repair",
+                        lambda *a, **k: repairs.__setitem__("n", repairs["n"] + 1))
+    return synth
+
+
+def test_validate_escalates_to_too_dense_after_three_repairs(tmp_path, monkeypatch):
+    repairs = {"n": 0}
+    synth = _synth(_DenseValidator(), 10, monkeypatch, repairs)
+    scene = Scene("01_x", "X", "scene_01_x.py", 20, "d", {"id": "Halo."})
+    sp = tmp_path / "scene_01_x.py"
+    sp.write_text("x")
+    with pytest.raises(SceneTooDenseError) as ei:
+        synth._validate_and_fix(make_storyboard(languages=["id"]), tmp_path, scene, "landscape", sp)
+    assert repairs["n"] == config.REPAIRS_BEFORE_SPLIT      # 3 in-place repairs, then escalate
+    assert ei.value.scene is scene
+
+
+def test_validate_nondense_never_escalates(tmp_path, monkeypatch):
+    repairs = {"n": 0}
+    synth = _synth(_OverlapValidator(), 3, monkeypatch, repairs)
+    scene = Scene("01_x", "X", "scene_01_x.py", 20, "d", {"id": "Halo."})
+    sp = tmp_path / "scene_01_x.py"
+    sp.write_text("x")
+    with pytest.raises(SystemExit) as ei:        # exhausts attempts, never "too dense"
+        synth._validate_and_fix(make_storyboard(languages=["id"]), tmp_path, scene, "landscape", sp)
+    assert "still violates" in str(ei.value)
+
+
+# --- StoryboardRefiner.split_scene -----------------------------------------
+
+
+def test_split_scene_divides_duration(tmp_path):
+    sb = make_storyboard(
+        languages=["id", "en"], project_brief="b",
+        scenes=[Scene("05_diagram", "Diagram", "scene_05_diagram.py", 24, "Too much.", {}),
+                Scene("01_a", "A", "scene_01_a.py", 30, "Intro.", {})])
+    revised = storyboard_text(scenes=[
+        {"basename": "05_diagrama", "classname": "Diagrama", "duration": 12, "description": "part one"},
+        {"basename": "05_diagramb", "classname": "Diagramb", "duration": 12, "description": "part two"},
+        {"basename": "01_a", "classname": "A", "duration": 30, "description": "Intro."}])
+    out = StoryboardRefiner(FakeAiClient(revised)).split_scene(
+        sb, sb.scenes[0], "OVERFLOW...", tmp_path, cap_seconds=180.0)
+    assert [s.basename for s in out.scenes] == ["05_diagrama", "05_diagramb", "01_a"]
+    assert out.duration_budget() == 54
+
+
+# --- split guards + the --only view ----------------------------------------
+
+
+def test_guard_split_raises_after_max_rounds():
+    exc = SceneTooDenseError(Scene("x", "X", "x.py", 24, "d", {}), "landscape", "ev")
+    with pytest.raises(SystemExit):
+        _guard_split(exc, config.MAX_SPLIT_ROUNDS)
+
+
+def test_guard_split_raises_on_duration_floor():
+    exc = SceneTooDenseError(Scene("x", "X", "x.py", 10, "d", {}), "landscape", "ev")  # 10/2=5 < 7
+    with pytest.raises(SystemExit) as ei:
+        _guard_split(exc, 0)
+    assert "7s" in str(ei.value)
+
+
+def test_guard_split_ok_when_splittable():
+    exc = SceneTooDenseError(Scene("x", "X", "x.py", 24, "d", {}), "landscape", "ev")  # 24/2=12 >= 7
+    _guard_split(exc, 0)   # must not raise
+
+
+def test_filtered_view():
+    sb = make_storyboard(scenes=[Scene("01_a", "A", "a.py", 10, "d", {}),
+                                 Scene("02_b", "B", "b.py", 10, "d", {})])
+    assert [s.basename for s in _filtered(sb, ["02_b"]).scenes] == ["02_b"]
+    assert _filtered(sb, None) is sb
+    with pytest.raises(SystemExit):
+        _filtered(sb, ["nope"])
+
+
+def test_run_with_splits_splits_then_succeeds(tmp_path, monkeypatch):
+    import vgen.pipeline as pl
+    sb = make_storyboard(scenes=[Scene("05_x", "X", "scene_05_x.py", 24, "d", {})])
+    dense = sb.scenes[0]
+    calls = {"runs": 0}
+
+    class _FakePipeline:
+        def __init__(self, active):
+            self.active = active
+
+        def run(self):
+            calls["runs"] += 1
+            if calls["runs"] == 1:
+                raise SceneTooDenseError(dense, "landscape", "OVERFLOW...")
+
+    split_sb = make_storyboard(scenes=[Scene("05_xa", "Xa", "scene_05_xa.py", 12, "d", {}),
+                                       Scene("05_xb", "Xb", "scene_05_xb.py", 12, "d", {})])
+    monkeypatch.setattr(pl, "build_pipeline", lambda active, o, opt: _FakePipeline(active))
+    monkeypatch.setattr(pl, "create_ai_client", lambda name: FakeAiClient())
+    monkeypatch.setattr(pl.StoryboardRefiner, "split_scene",
+                        lambda self, sb_, sc, ev, out, cap: split_sb)
+    options = BuildOptions(storyboard="x.md", output=str(tmp_path), only=None)
+    _run_with_splits(sb, tmp_path, options)
+    assert calls["runs"] == 2     # raised once, split, then succeeded

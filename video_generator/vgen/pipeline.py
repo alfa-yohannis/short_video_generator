@@ -13,6 +13,7 @@ the storyboard, applies CLI overrides, wires up a pipeline and runs it.
 
 from __future__ import annotations
 
+import dataclasses
 import shutil
 import time
 from dataclasses import dataclass, field
@@ -22,6 +23,7 @@ from typing import List, Optional
 from . import config
 from .ai_client import create_ai_client
 from .assembly import ClipAssembler
+from .density import SceneTooDenseError
 from .dependencies import DependencyChecker
 from .duration import DurationFitter
 from .models import Storyboard
@@ -227,7 +229,7 @@ def run_build(options: BuildOptions) -> None:
     if options.refine_storyboard:
         cap = storyboard.max_duration or config.DEFAULT_DURATION_CAP_SECONDS
         refined = StoryboardRefiner(create_ai_client(storyboard.ai_cli)).refine(
-            storyboard_path, output, cap)
+            storyboard, output, cap)
         if _scenes_changed(storyboard, refined):
             progress.log("  storyboard changed by refinement — regenerating everything "
                          "from the start")
@@ -240,14 +242,62 @@ def run_build(options: BuildOptions) -> None:
     output.mkdir(parents=True, exist_ok=True)
 
     _print_header(storyboard, output)
+    _run_with_splits(storyboard, output, options)
 
-    if options.only:
-        wanted = set(options.only)
-        storyboard.scenes = [s for s in storyboard.scenes if s.basename in wanted]
-        if not storyboard.scenes:
-            raise SystemExit(f"No scenes matched --only filter: {options.only}")
 
-    build_pipeline(storyboard, output, options).run()
+def _run_with_splits(storyboard: Storyboard, output: Path, options: BuildOptions) -> None:
+    """Run the pipeline; if a scene proves too dense to fit, split it in the
+    storyboard and run again, up to a bounded number of rounds.
+
+    A split only renames/adds the split scene's children, so the next run reuses
+    every unchanged scene's cached artifacts (no full wipe needed) and generates
+    just the new scenes.
+    """
+    rounds = 0
+    while True:
+        active = _filtered(storyboard, options.only)
+        try:
+            build_pipeline(active, output, options).run()
+            return
+        except SceneTooDenseError as exc:
+            _guard_split(exc, rounds)
+            rounds += 1
+            progress.log(f"  '{exc.scene.basename}' is too dense — splitting it in the "
+                         f"storyboard (round {rounds}/{config.MAX_SPLIT_ROUNDS}) and "
+                         "regenerating the new scenes")
+            cap = storyboard.max_duration or config.DEFAULT_DURATION_CAP_SECONDS
+            before = {s.basename for s in storyboard.scenes}
+            storyboard = StoryboardRefiner(create_ai_client(storyboard.ai_cli)).split_scene(
+                storyboard, exc.scene, exc.evidence, output, cap)
+            apply_cli_overrides(storyboard, options)
+            if options.only and exc.scene.basename in options.only:
+                children = [s.basename for s in storyboard.scenes if s.basename not in before]
+                options.only = [b for b in options.only if b != exc.scene.basename] + children
+
+
+def _guard_split(exc: SceneTooDenseError, rounds: int) -> None:
+    """Refuse to split when it can't help — fail with actionable advice instead."""
+    if rounds >= config.MAX_SPLIT_ROUNDS:
+        raise SystemExit(
+            f"'{exc.scene.basename}' is still too dense after {config.MAX_SPLIT_ROUNDS} "
+            f"split(s). Simplify it in the storyboard. Evidence: {exc.evidence}"
+        )
+    if exc.scene.fallback_duration / 2.0 < config.MIN_CHILD_DURATION_SECONDS:
+        raise SystemExit(
+            f"'{exc.scene.basename}' ({exc.scene.fallback_duration:g}s) is too dense, but "
+            f"splitting it would create scenes under {config.MIN_CHILD_DURATION_SECONDS:g}s. "
+            f"Simplify it in the storyboard instead. Evidence: {exc.evidence}"
+        )
+
+
+def _filtered(storyboard: Storyboard, only: Optional[List[str]]) -> Storyboard:
+    """A view of the storyboard restricted to the ``--only`` scene basenames."""
+    if not only:
+        return storyboard
+    scenes = [s for s in storyboard.scenes if s.basename in set(only)]
+    if not scenes:
+        raise SystemExit(f"No scenes matched --only filter: {only}")
+    return dataclasses.replace(storyboard, scenes=scenes)
 
 
 def _scenes_changed(before: Storyboard, after: Storyboard) -> bool:
