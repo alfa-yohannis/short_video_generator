@@ -60,6 +60,7 @@ class Storyboard:
     scenes_portrait_dir: Optional[Path]
     scenes: List[Scene]
     project_brief: str
+    min_duration: Optional[float] = None  # whole-video floor in seconds, or None
     max_duration: Optional[float] = None  # whole-video cap in seconds, or None
 
     # --- tiny derived helpers (no side effects) ---------------------------
@@ -98,6 +99,8 @@ class Storyboard:
         lines.append(f"fps: {self.fps}")
         w, h = self.resolution_landscape
         lines.append(f"resolution_landscape: [{w}, {h}]")
+        if self.min_duration is not None:
+            lines.append(f"min_duration: {self.min_duration:g}")
         if self.max_duration is not None:
             lines.append(f"max_duration: {self.max_duration:g}")
         lines.append("---")

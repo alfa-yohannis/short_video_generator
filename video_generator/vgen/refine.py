@@ -42,10 +42,12 @@ class StoryboardRefiner:
                attempts: int = 3) -> Storyboard:
         """Review every scene's density and rewrite the over-dense ones."""
         current = storyboard.to_markdown()
-        progress.log(f"  reviewing storyboard density (cap {cap_seconds:.0f}s) via {self.ai.name}…")
+        floor_seconds = storyboard.min_duration or config.DEFAULT_DURATION_FLOOR_SECONDS
+        progress.log(f"  reviewing storyboard density "
+                     f"({floor_seconds:.0f}-{cap_seconds:.0f}s) via {self.ai.name}…")
         return self._generate_valid(
-            lambda last: self._density_prompt(current, cap_seconds, last),
-            output, cap_seconds, attempts,
+            lambda last: self._density_prompt(current, floor_seconds, cap_seconds, last),
+            output, floor_seconds, cap_seconds, attempts,
             describe=lambda sb: f"refined storyboard: {len(sb.scenes)} scenes, "
                                 f"{sb.duration_budget():.0f}s total")
 
@@ -53,18 +55,20 @@ class StoryboardRefiner:
                     output: Path, cap_seconds: float, attempts: int = 3) -> Storyboard:
         """Split one too-dense scene into smaller ones, dividing its duration."""
         current = storyboard.to_markdown()
+        floor_seconds = storyboard.min_duration or config.DEFAULT_DURATION_FLOOR_SECONDS
         progress.log(f"  splitting too-dense scene '{scene.basename}' "
                      f"({scene.fallback_duration:g}s) via {self.ai.name}…")
         return self._generate_valid(
-            lambda last: self._split_prompt(current, scene, evidence, cap_seconds, last),
-            output, cap_seconds, attempts,
+            lambda last: self._split_prompt(
+                current, scene, evidence, floor_seconds, cap_seconds, last),
+            output, floor_seconds, cap_seconds, attempts,
             describe=lambda sb: f"split into {len(sb.scenes)} scenes, "
                                 f"{sb.duration_budget():.0f}s total")
 
     # --- shared generate -> parse -> validate -> retry loop ----------------
 
     def _generate_valid(self, build_prompt: Callable[[str], str], output: Path,
-                        cap_seconds: float, attempts: int,
+                        floor_seconds: float, cap_seconds: float, attempts: int,
                         describe: Callable[[Storyboard], str]) -> Storyboard:
         refined_path = output / "storyboard.refined.md"
         last_problem = ""
@@ -77,6 +81,10 @@ class StoryboardRefiner:
                 last_problem = str(exc)
                 continue
             budget = refined.duration_budget()
+            if budget < floor_seconds - 1e-6:
+                last_problem = (f"the scene fallback_duration values sum to {budget:.0f}s, "
+                                f"below the {floor_seconds:.0f}s minimum")
+                continue
             if budget > cap_seconds + 1e-6:
                 last_problem = (f"the scene fallback_duration values sum to {budget:.0f}s, "
                                 f"over the {cap_seconds:.0f}s cap")
@@ -84,13 +92,16 @@ class StoryboardRefiner:
             progress.log(f"    ↳ {describe(refined)} -> {refined_path}")
             return refined
         raise SystemExit(
-            f"Storyboard rewrite could not stay within the {cap_seconds:.0f}s cap after "
+            f"Storyboard rewrite could not stay within the {floor_seconds:.0f}-"
+            f"{cap_seconds:.0f}s range after "
             f"{attempts} attempt(s). Last problem: {last_problem}"
         )
 
     # --- prompts -----------------------------------------------------------
 
-    def _density_prompt(self, markdown: str, cap_seconds: float, last_problem: str) -> str:
+    def _density_prompt(self, markdown: str, floor_seconds: float,
+                        cap_seconds: float, last_problem: str) -> str:
+        floor_minutes = floor_seconds / 60.0
         minutes = cap_seconds / 60.0
         return f"""You are reviewing a tutorial-video STORYBOARD (markdown) for scene density.
 
@@ -104,8 +115,10 @@ you MAY: trim/simplify its `### description`; split one dense scene into two
 `**fallback_duration:**` values.
 
 HARD RULES:
-- The whole video MUST fit {cap_seconds:.0f} seconds ({minutes:.0f} minutes): the
-  SUM of every `**fallback_duration:**` MUST be <= {cap_seconds:.0f}.
+- The whole video MUST stay between {floor_seconds:.0f} seconds
+  ({floor_minutes:.0f} minutes) and {cap_seconds:.0f} seconds
+  ({minutes:.0f} minutes): the SUM of every `**fallback_duration:**` MUST be
+  >= {floor_seconds:.0f} and <= {cap_seconds:.0f}.
 - Keep the YAML front-matter intact. Do NOT add narration text or scene code.
 - If NO scene is too dense, return the storyboard UNCHANGED.
 - Output ONLY the storyboard markdown — no commentary, no code fences.
@@ -116,7 +129,7 @@ Here is the current storyboard:
 """
 
     def _split_prompt(self, markdown: str, scene: Scene, evidence: str,
-                      cap_seconds: float, last_problem: str) -> str:
+                      floor_seconds: float, cap_seconds: float, last_problem: str) -> str:
         floor = config.MIN_CHILD_DURATION_SECONDS
         return f"""You are fixing a TOO-DENSE scene in a tutorial-video storyboard.
 
@@ -137,7 +150,8 @@ HARD RULES:
   `## Scene: <basename> / <ClassName>`, `**file:** scene_<basename>.py`,
   `**fallback_duration:**`, and a focused `### description`.
 - Do NOT change any other scene. Keep the YAML front-matter intact. The SUM of
-  ALL `**fallback_duration:**` values MUST stay <= {cap_seconds:.0f}.
+  ALL `**fallback_duration:**` values MUST stay >= {floor_seconds:.0f} and
+  <= {cap_seconds:.0f}.
 - Do NOT add narration text or scene code.
 - Output ONLY the storyboard markdown — no commentary, no code fences.
 {self._retry_note(last_problem)}

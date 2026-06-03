@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from . import config
 from .models import Scene, Storyboard
@@ -164,7 +164,7 @@ class StoryboardParser:
         base = path.parent
         raw_landscape = cfg.get("scenes_landscape_dir")
         raw_portrait = cfg.get("scenes_portrait_dir")
-        max_duration = self._read_max_duration(cfg, scenes)
+        min_duration, max_duration = self._read_duration_limits(cfg, scenes)
 
         return Storyboard(
             title=str(cfg.get("title") or path.stem),
@@ -181,16 +181,40 @@ class StoryboardParser:
             scenes_portrait_dir=(base / raw_portrait).resolve() if raw_portrait else None,
             scenes=scenes,
             project_brief=project_brief,
+            min_duration=min_duration,
             max_duration=max_duration,
         )
 
-    def _read_max_duration(self, cfg: dict, scenes: List[Scene]) -> Optional[float]:
-        """Read the optional whole-video cap and sanity-check it against the budget."""
+    def _read_duration_limits(
+        self, cfg: dict, scenes: List[Scene]
+    ) -> Tuple[Optional[float], Optional[float]]:
+        """Read whole-video duration limits and sanity-check them against the budget."""
+        min_duration = parse_duration_spec(
+            cfg.get("min_duration", config.DEFAULT_DURATION_FLOOR_SECONDS)
+        )
+        if min_duration is None:
+            min_duration = config.DEFAULT_DURATION_FLOOR_SECONDS
         max_duration = parse_duration_spec(
             cfg.get("max_duration", cfg.get("max_scene_duration"))
         )
+        if (
+            max_duration is not None
+            and min_duration is not None
+            and max_duration < min_duration - 1e-6
+        ):
+            raise SystemExit(
+                f"max_duration is {max_duration:.0f}s but minimum duration is "
+                f"{min_duration:.0f}s. Increase max_duration or lower min_duration."
+            )
+        budget = sum(s.fallback_duration for s in scenes)
+        if min_duration is not None and budget < min_duration - 1e-6:
+            raise SystemExit(
+                f"Storyboard duration budget is {budget:.0f}s but minimum duration is "
+                f"{min_duration:.0f}s. The video length tracks the sum of each "
+                f"scene's fallback_duration, so extend those until they sum to "
+                f">= {min_duration:.0f}s (currently short by {min_duration - budget:.0f}s)."
+            )
         if max_duration is not None:
-            budget = sum(s.fallback_duration for s in scenes)
             if budget > max_duration + 1e-6:
                 raise SystemExit(
                     f"Storyboard duration budget is {budget:.0f}s but max_duration is "
@@ -198,7 +222,7 @@ class StoryboardParser:
                     f"scene's fallback_duration, so trim those until they sum to "
                     f"<= {max_duration:.0f}s (currently over by {budget - max_duration:.0f}s)."
                 )
-        return max_duration
+        return min_duration, max_duration
 
     # --- a cheap front-matter peek (no yaml) -------------------------------
 

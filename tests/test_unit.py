@@ -158,7 +158,9 @@ def test_parse_storyboard_full(parser, tmp_path):
 
 def test_parse_storyboard_defaults(parser, tmp_path):
     text = ("---\ntitle: minimal\n---\n\nBrief.\n\n"
-            "## Scene: 01_only / Only\n\n### description\nA scene.\n")
+            "## Scene: 01_only / Only\n\n"
+            "**fallback_duration:** 120\n\n"
+            "### description\nA scene.\n")
     p = tmp_path / "min.md"
     p.write_text(text, encoding="utf-8")
     sb = parser.parse(p)
@@ -200,7 +202,7 @@ def test_peek_ai_cli_missing_returns_none(tmp_path):
     assert StoryboardParser.peek_ai_cli(p) is None
 
 
-# --- duration spec + max-duration budget -----------------------------------
+# --- duration spec + duration budget ---------------------------------------
 
 
 @pytest.mark.parametrize("value,expected", [
@@ -226,6 +228,19 @@ def test_max_duration_under_budget_ok(parser, tmp_path):
     p = write_storyboard(tmp_path / "sb.md", scenes=_durations_md([60, 60, 50]))
     p.write_text(p.read_text().replace("fps: 30", "max_duration: 3 minutes\nfps: 30"))
     assert parser.parse(p).max_duration == 180.0
+
+
+def test_default_min_duration_under_budget_raises(parser, tmp_path):
+    p = write_storyboard(tmp_path / "sb.md", scenes=_durations_md([60, 50]))  # 110
+    with pytest.raises(SystemExit) as ei:
+        parser.parse(p)
+    assert "minimum duration" in str(ei.value) and "110" in str(ei.value)
+
+
+def test_min_duration_at_budget_ok(parser, tmp_path):
+    p = write_storyboard(tmp_path / "sb.md", scenes=_durations_md([60, 60]))
+    sb = parser.parse(p)
+    assert sb.min_duration == 120.0 and sb.duration_budget() == 120.0
 
 
 def test_max_duration_over_budget_raises(parser, tmp_path):
@@ -893,13 +908,13 @@ def test_refiner_gives_up_after_attempts(tmp_path):
     refiner = StoryboardRefiner(FakeAiClient(always_over))
     with pytest.raises(SystemExit) as ei:
         refiner.refine(_input_storyboard(90), tmp_path, cap_seconds=180.0, attempts=2)
-    assert "within the 180s cap" in str(ei.value)
+    assert "within the 120-180s range" in str(ei.value)
 
 
 def test_refiner_strips_fence_and_prose(tmp_path):
-    body = storyboard_text(scenes=[{"basename": "01_a", "classname": "A", "duration": 30}])
+    body = storyboard_text(scenes=[{"basename": "01_a", "classname": "A", "duration": 120}])
     reply = "Sure, here is the revised storyboard:\n```markdown\n" + body + "\n```\nHope it helps!"
-    sb = StoryboardRefiner(FakeAiClient(reply)).refine(_input_storyboard(90), tmp_path, cap_seconds=180.0)
+    sb = StoryboardRefiner(FakeAiClient(reply)).refine(_input_storyboard(120), tmp_path, cap_seconds=180.0)
     assert [s.basename for s in sb.scenes] == ["01_a"]
 
 
@@ -956,16 +971,16 @@ def test_storyboard_to_markdown_roundtrips(tmp_path):
         title="demo", languages=["id", "en"], voices={"id": "id-ID-ArdiNeural"},
         tts_provider="edge", max_duration=180.0, project_brief="A brief.",
         scenes=[Scene("01_a", "A", "scene_01_a.py", 60, "Desc one.", {"id": "Halo.", "en": "Hi."}),
-                Scene("02_b", "B", "scene_02_b.py", 45, "Desc two.", {})])
+                Scene("02_b", "B", "scene_02_b.py", 60, "Desc two.", {})])
     p = tmp_path / "rt.md"
     p.write_text(sb.to_markdown(), encoding="utf-8")
     out = StoryboardParser().parse(p)
-    assert out.title == "demo" and out.max_duration == 180.0
+    assert out.title == "demo" and out.min_duration == 120.0 and out.max_duration == 180.0
     assert out.voices == {"id": "id-ID-ArdiNeural"}
     assert [(s.basename, s.classname, s.file, s.fallback_duration, s.description)
             for s in out.scenes] == [
         ("01_a", "A", "scene_01_a.py", 60.0, "Desc one."),
-        ("02_b", "B", "scene_02_b.py", 45.0, "Desc two.")]
+        ("02_b", "B", "scene_02_b.py", 60.0, "Desc two.")]
     assert out.scenes[0].narration == {"id": "Halo.", "en": "Hi."}
     assert out.scenes[1].narration == {}
 
@@ -1023,16 +1038,16 @@ def test_validate_nondense_never_escalates(tmp_path, monkeypatch):
 def test_split_scene_divides_duration(tmp_path):
     sb = make_storyboard(
         languages=["id", "en"], project_brief="b",
-        scenes=[Scene("05_diagram", "Diagram", "scene_05_diagram.py", 24, "Too much.", {}),
-                Scene("01_a", "A", "scene_01_a.py", 30, "Intro.", {})])
+        scenes=[Scene("05_diagram", "Diagram", "scene_05_diagram.py", 60, "Too much.", {}),
+                Scene("01_a", "A", "scene_01_a.py", 60, "Intro.", {})])
     revised = storyboard_text(scenes=[
-        {"basename": "05_diagrama", "classname": "Diagrama", "duration": 12, "description": "part one"},
-        {"basename": "05_diagramb", "classname": "Diagramb", "duration": 12, "description": "part two"},
-        {"basename": "01_a", "classname": "A", "duration": 30, "description": "Intro."}])
+        {"basename": "05_diagrama", "classname": "Diagrama", "duration": 30, "description": "part one"},
+        {"basename": "05_diagramb", "classname": "Diagramb", "duration": 30, "description": "part two"},
+        {"basename": "01_a", "classname": "A", "duration": 60, "description": "Intro."}])
     out = StoryboardRefiner(FakeAiClient(revised)).split_scene(
         sb, sb.scenes[0], "OVERFLOW...", tmp_path, cap_seconds=180.0)
     assert [s.basename for s in out.scenes] == ["05_diagrama", "05_diagramb", "01_a"]
-    assert out.duration_budget() == 54
+    assert out.duration_budget() == 120
 
 
 # --- split guards + the --only view ----------------------------------------

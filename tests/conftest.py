@@ -130,7 +130,7 @@ def storyboard_text(
         parts.append(heading)
         parts.append("")
         parts.append(f"**file:** {sc.get('file', f'scene_{basename}.py')}")
-        parts.append(f"**fallback_duration:** {sc.get('duration', 12)}")
+        parts.append(f"**fallback_duration:** {sc.get('duration', 120)}")
         parts.append("")
         if "description" in sc:
             parts.append("### description")

@@ -335,7 +335,11 @@ def _print_header(storyboard: Storyboard, output: Path) -> None:
     print(f"AI CLI:       {storyboard.ai_cli}")
     print(f"Scenes dirs:  landscape={storyboard.scenes_landscape_dir}, "
           f"portrait={storyboard.scenes_portrait_dir}")
-    if storyboard.max_duration is not None:
-        print(f"Duration:     budget {storyboard.duration_budget():.0f}s / "
-              f"cap {storyboard.max_duration:.0f}s")
+    if storyboard.min_duration is not None or storyboard.max_duration is not None:
+        parts = [f"budget {storyboard.duration_budget():.0f}s"]
+        if storyboard.min_duration is not None:
+            parts.append(f"min {storyboard.min_duration:.0f}s")
+        if storyboard.max_duration is not None:
+            parts.append(f"cap {storyboard.max_duration:.0f}s")
+        print(f"Duration:     {' / '.join(parts)}")
     print()

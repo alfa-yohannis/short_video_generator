@@ -9,6 +9,7 @@ tts_provider: edge          # edge | gemini
 ai_cli: claude              # claude | codex
 fps: 30
 resolution_landscape: [1920, 1080]
+min_duration: 2 minutes
 max_scene_duration: 3 minutes
 ---
 

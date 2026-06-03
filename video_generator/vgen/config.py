@@ -64,8 +64,10 @@ GEMINI_TTS_ENDPOINT = (
     "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 )
 
-# Whole-video duration cap used when the storyboard doesn't set its own
-# (max_duration / max_scene_duration). "Strictly 3 minutes."
+# Whole-video duration floor/cap. The floor is enforced for every parsed
+# storyboard; the cap is used when the storyboard doesn't set its own
+# (max_duration / max_scene_duration). "Strictly 2-3 minutes."
+DEFAULT_DURATION_FLOOR_SECONDS = 120.0
 DEFAULT_DURATION_CAP_SECONDS = 180.0
 
 # --- Narration timing ------------------------------------------------------

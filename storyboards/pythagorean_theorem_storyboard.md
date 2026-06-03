@@ -9,6 +9,7 @@ tts_provider: edge
 ai_cli: claude
 fps: 30
 resolution_landscape: [1920, 1080]
+min_duration: 2 minutes
 ---
 
 # Pythagorean Theorem — Bilingual Tutorial
@@ -26,7 +27,7 @@ descriptions below — the storyboard is intentionally narration-free.
 ## Scene: 01_pengantar / Pengantar
 
 **file:** scene_01_pengantar.py
-**fallback_duration:** 14
+**fallback_duration:** 16
 
 ### description
 Title card. Introduce the theorem by name, hint at the right-triangle setup,
@@ -36,7 +37,7 @@ able to state the theorem and read a simple geometric proof.
 ## Scene: 02_segitiga_siku_siku / SegitigaSikuSiku
 
 **file:** scene_02_segitiga_siku_siku.py
-**fallback_duration:** 16
+**fallback_duration:** 18
 
 ### description
 Build up a labelled right triangle on the blueprint background: the two legs
@@ -46,7 +47,7 @@ that the theorem only applies when one angle is exactly 90 degrees.
 ## Scene: 03_pernyataan / Pernyataan
 
 **file:** scene_03_pernyataan.py
-**fallback_duration:** 14
+**fallback_duration:** 16
 
 ### description
 Show the equation `a² + b² = c²` formally, then animate three squares — one
@@ -57,7 +58,7 @@ of the areas of the squares on the legs.
 ## Scene: 04_bukti_visual / BuktiVisual
 
 **file:** scene_04_bukti_visual.py
-**fallback_duration:** 24
+**fallback_duration:** 28
 
 ### description
 Visual proof by rearrangement. Show a large square of side `a + b` containing
@@ -69,7 +70,7 @@ areas are equal. That is the theorem.
 ## Scene: 05_contoh / Contoh
 
 **file:** scene_05_contoh.py
-**fallback_duration:** 18
+**fallback_duration:** 20
 
 ### description
 Worked example. Given legs `a = 3` and `b = 4`, compute the hypotenuse step
@@ -80,7 +81,7 @@ sides, the third can be found.
 ## Scene: 06_aplikasi_dan_kesimpulan / AplikasiDanKesimpulan
 
 **file:** scene_06_aplikasi_dan_kesimpulan.py
-**fallback_duration:** 20
+**fallback_duration:** 22
 
 ### description
 Wrap up with two short, concrete uses: finding the diagonal of a rectangular

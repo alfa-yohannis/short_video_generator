@@ -221,6 +221,7 @@ gemini_model: gemini-2.5-flash-preview-tts   # optional; only used for gemini
 ai_cli: claude                # claude | codex  (CLI --ai-cli overrides this)
 fps: 30
 resolution_landscape: [1920, 1080]
+min_duration: 2 minutes      # total-video floor; default is 2 minutes
 max_duration: 3 minutes      # optional total-video cap (also '180', '2:30', '90s')
 # scenes_landscape_dir / scenes_portrait_dir are optional — when omitted,
 # the generator creates fresh ones under <output>/scenes_<orient>/.
@@ -245,14 +246,17 @@ override defaults. Subsections like `### description`, `### narration.id`,
 the AI CLI writes it. If a scene's `.py` file is absent, the AI CLI generates it
 from the description + narration + embedded `_common.py` helpers.
 
-### Limiting total duration
+### Constraining total duration
 
-Set `max_duration` in the front-matter (e.g. `3 minutes`, `180`, `2:30`, `90s`)
-to cap the whole video (`max_scene_duration` is an accepted alias and still means
-the whole-video total). It's enforced at three points:
+The generator enforces a **2-minute minimum** by default. Set `min_duration` in
+the front-matter to make that floor explicit or choose a different floor. Set
+`max_duration` (e.g. `3 minutes`, `180`, `2:30`, `90s`) to cap the whole video
+(`max_scene_duration` is an accepted alias and still means the whole-video
+total). The duration range is enforced at three points:
 
-1. **Parse time** — the sum of per-scene `fallback_duration` values must be ≤ the
-   cap, or the build refuses before any AI/TTS/render cost.
+1. **Parse time** — the sum of per-scene `fallback_duration` values must be ≥ the
+   minimum and, when `max_duration` is set, ≤ the cap. Otherwise the build refuses
+   before any AI/TTS/render cost.
 2. **Before TTS (estimate)** — once narration text exists, the generator
    estimates each language's spoken time from the word count (~2 words/sec) and,
    if it's over the cap, asks the AI to **compress the over-long scenes** so the
@@ -263,7 +267,9 @@ the whole-video total). It's enforced at three points:
 
 Narration is generated tightly (~1.9 words/sec, as a hard word limit) so it
 usually fits on the first pass; steps 2–3 are the safety net. To leave more
-headroom, trim the per-scene `fallback_duration` values.
+headroom, trim the per-scene `fallback_duration` values. To satisfy the
+2-minute floor, extend or add scenes until their `fallback_duration` values sum
+to at least 120 seconds.
 
 ### Bringing your own Manim sources
 
