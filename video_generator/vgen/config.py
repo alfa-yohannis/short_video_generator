@@ -48,9 +48,10 @@ DEFAULT_GEMINI_VOICE = "Iapetus"
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash-preview-tts"
 
 # Default Claude model + effort tier for narration / scene generation. Opus at
-# the top ("max") effort gives the best layout-aware scene code.
+# "high" effort gives strong layout-aware scene code; bump to "max" if you want
+# the top reasoning tier at extra latency/cost.
 DEFAULT_CLAUDE_MODEL = "claude-opus-4-8"
-DEFAULT_CLAUDE_EFFORT = "max"
+DEFAULT_CLAUDE_EFFORT = "high"
 
 # Codex CLI: maximum reasoning effort ("high") = max capacity. The model is left
 # to codex's own default for the signed-in account, because ChatGPT-account
