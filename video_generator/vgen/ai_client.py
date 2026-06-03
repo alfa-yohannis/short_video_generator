@@ -124,8 +124,8 @@ class CodexClient(AiClient):
     """Drives OpenAI's ``codex`` CLI. ``--sandbox read-only`` stops it writing
     files (the same agentic pitfall as Claude), so the reply lands on stdout.
 
-    Defaults to the flagship model at the highest reasoning effort ("max
-    capacity"), matching ClaudeClient's top-tier defaults.
+    Defaults to the flagship model at codex's highest reasoning effort ("high"
+    = max capacity for codex), independent of ClaudeClient's effort default.
     """
 
     name = "codex"
