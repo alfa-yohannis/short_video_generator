@@ -1098,7 +1098,7 @@ def test_run_with_splits_splits_then_succeeds(tmp_path, monkeypatch):
     split_sb = make_storyboard(scenes=[Scene("05_xa", "Xa", "scene_05_xa.py", 12, "d", {}),
                                        Scene("05_xb", "Xb", "scene_05_xb.py", 12, "d", {})])
     monkeypatch.setattr(pl, "build_pipeline", lambda active, o, opt: _FakePipeline(active))
-    monkeypatch.setattr(pl, "create_ai_client", lambda name: FakeAiClient())
+    monkeypatch.setattr(pl, "create_ai_client", lambda name, effort=None: FakeAiClient())
     monkeypatch.setattr(pl.StoryboardRefiner, "split_scene",
                         lambda self, sb_, sc, ev, out, cap: split_sb)
     options = BuildOptions(storyboard="x.md", output=str(tmp_path), only=None)

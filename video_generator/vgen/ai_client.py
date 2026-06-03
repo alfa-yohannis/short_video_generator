@@ -153,9 +153,17 @@ _CLIENTS = {
 }
 
 
-def create_ai_client(name: str) -> AiClient:
-    """Factory: build the :class:`AiClient` for a storyboard's ``ai_cli`` value."""
+def create_ai_client(name: str, effort: "Optional[str]" = None) -> AiClient:
+    """Factory: build the :class:`AiClient` for a storyboard's ``ai_cli`` value.
+
+    ``effort`` sets Claude's reasoning tier (low/medium/high/xhigh/max). It only
+    applies to :class:`ClaudeClient`; codex has its own reasoning default and
+    ignores it.
+    """
     try:
-        return _CLIENTS[name]()
+        cls = _CLIENTS[name]
     except KeyError:
         raise SystemExit(f"Unknown ai_cli '{name}'. Use 'claude' or 'codex'.")
+    if cls is ClaudeClient and effort:
+        return cls(effort=effort)
+    return cls()

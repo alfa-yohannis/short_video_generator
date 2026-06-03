@@ -47,6 +47,7 @@ class BuildOptions:
     only: Optional[List[str]] = None
     force: bool = False
     ai_cli: Optional[str] = "claude"
+    effort: str = config.DEFAULT_CLAUDE_EFFORT   # Claude reasoning tier; codex ignores it
     tts: Optional[str] = None
     voice: Optional[str] = None
     gemini_api_key: Optional[str] = None
@@ -159,7 +160,7 @@ def build_pipeline(storyboard: Storyboard, output: Path, options: BuildOptions) 
     This is the one place that knows which concrete classes implement each role,
     so the rest of the program depends only on the interfaces.
     """
-    ai_client = create_ai_client(storyboard.ai_cli)
+    ai_client = create_ai_client(storyboard.ai_cli, options.effort)
     tts_engine = create_tts_engine(storyboard)
     # When --validate-scenes is on, give the synthesizer a validator so it
     # render-checks (and refines) each scene the moment it is generated.
@@ -228,7 +229,7 @@ def run_build(options: BuildOptions) -> None:
     regenerate = options.force
     if options.refine_storyboard:
         cap = storyboard.max_duration or config.DEFAULT_DURATION_CAP_SECONDS
-        refined = StoryboardRefiner(create_ai_client(storyboard.ai_cli)).refine(
+        refined = StoryboardRefiner(create_ai_client(storyboard.ai_cli, options.effort)).refine(
             storyboard, output, cap)
         if _scenes_changed(storyboard, refined):
             progress.log("  storyboard changed by refinement — regenerating everything "
@@ -267,7 +268,8 @@ def _run_with_splits(storyboard: Storyboard, output: Path, options: BuildOptions
                          "regenerating the new scenes")
             cap = storyboard.max_duration or config.DEFAULT_DURATION_CAP_SECONDS
             before = {s.basename for s in storyboard.scenes}
-            storyboard = StoryboardRefiner(create_ai_client(storyboard.ai_cli)).split_scene(
+            storyboard = StoryboardRefiner(
+                create_ai_client(storyboard.ai_cli, options.effort)).split_scene(
                 storyboard, exc.scene, exc.evidence, output, cap)
             apply_cli_overrides(storyboard, options)
             if options.only and exc.scene.basename in options.only:

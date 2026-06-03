@@ -11,6 +11,7 @@ import argparse
 from pathlib import Path
 from typing import Optional, Sequence
 
+from . import config
 from .pipeline import BuildOptions, run_build
 
 
@@ -34,6 +35,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--ai-cli", choices=["claude", "codex"], default="claude",
         help="AI CLI used to fill in missing narration / scene .py files "
              "(default: claude). Overrides 'ai_cli' in the storyboard front-matter.",
+    )
+    parser.add_argument(
+        "--effort", choices=["low", "medium", "high", "xhigh", "max"],
+        default=config.DEFAULT_CLAUDE_EFFORT,
+        help="Reasoning effort for the Claude AI CLI (default: "
+             f"{config.DEFAULT_CLAUDE_EFFORT}; pass 'max' for the top tier). "
+             "Ignored when --ai-cli is codex.",
     )
     parser.add_argument(
         "--tts", choices=["edge", "gemini"], default=None,
@@ -101,6 +109,7 @@ def options_from_args(args: argparse.Namespace) -> BuildOptions:
         only=args.only,
         force=args.force,
         ai_cli=args.ai_cli,
+        effort=args.effort,
         tts=args.tts,
         voice=args.voice,
         gemini_api_key=args.gemini_api_key,
