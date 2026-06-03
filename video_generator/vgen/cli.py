@@ -1,0 +1,120 @@
+"""Command-line interface: parse arguments into :class:`BuildOptions` and build.
+
+This module is intentionally thin. Its only job is to translate the command
+line into a :class:`~vgen.pipeline.BuildOptions` value object and hand it to
+:func:`~vgen.pipeline.run_build`. All the real work lives in the service classes.
+"""
+
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+from typing import Optional, Sequence
+
+from .pipeline import BuildOptions, run_build
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Generate a bilingual Manim tutorial video from a storyboard markdown file."
+    )
+    parser.add_argument("--storyboard", required=True, help="Path to storyboard markdown file")
+    parser.add_argument("--output", required=True, help="Output directory (all intermediates go here)")
+    parser.add_argument(
+        "--stage",
+        choices=["all", "scripts", "audio", "scenes", "render", "mux", "concat", "srt", "youtube"],
+        default="all", help="Run only one stage of the pipeline (default: all)",
+    )
+    parser.add_argument(
+        "--only", nargs="*", default=None,
+        help="Restrict pipeline to these scene basenames (for testing one scene)",
+    )
+    parser.add_argument("--force", action="store_true", help="Rebuild artifacts even if they exist")
+    parser.add_argument(
+        "--ai-cli", choices=["claude", "codex"], default="claude",
+        help="AI CLI used to fill in missing narration / scene .py files "
+             "(default: claude). Overrides 'ai_cli' in the storyboard front-matter.",
+    )
+    parser.add_argument(
+        "--tts", choices=["edge", "gemini"], default=None,
+        help="Text-to-speech provider. edge is free/no-key with exact subtitle "
+             "timing (default voice Ardi); gemini needs an API key and gives nicer "
+             "voices with estimated subtitle timing (default voice Iapetus). "
+             "Overrides 'tts_provider' in the storyboard front-matter when set.",
+    )
+    parser.add_argument(
+        "--voice", default=None,
+        help="Override the TTS voice for every language this run "
+             "(e.g. id-ID-GadisNeural for edge, or Charon for gemini).",
+    )
+    parser.add_argument(
+        "--gemini-api-key", default=None,
+        help="Gemini API key. Defaults to $GEMINI_API_KEY, then a .env at the "
+             "repo root, then 'gemini_api_key:' in the storyboard front-matter.",
+    )
+    parser.add_argument(
+        "--check-layout", choices=["off", "warn", "strict", "fit"], default="off",
+        help="At render time, check each scene's text for off-frame overflow / "
+             "clipping / overlap. 'warn' logs; 'strict' fails; 'fit' auto-scales "
+             "overflowing text back inside the frame (default: off).",
+    )
+    parser.add_argument(
+        "--repair-attempts", "--layout-repair-attempts", type=int, default=2,
+        dest="repair_attempts",
+        help="How many times to ask the AI to fix a scene that FAILS to render "
+             "before giving up (default: 2; 0 disables AI repair).",
+    )
+    parser.add_argument(
+        "--validate-scenes", action="store_true",
+        help="Right after generating each scene, render-check it against the "
+             "layout rules (strict) and automatically refine it until it passes "
+             "(see --validate-attempts), before the real render.",
+    )
+    parser.add_argument(
+        "--validate-attempts", type=int, default=10,
+        help="With --validate-scenes, how many times to refine a scene that "
+             "fails the check before giving up (default: 10).",
+    )
+    parser.add_argument(
+        "--refine-storyboard", action="store_true",
+        help="Before building, let the AI rewrite the storyboard if any scene is "
+             "too dense (trim/split/rebalance scenes), keeping the whole video "
+             "within the duration cap. If it changes the plan, everything is "
+             "regenerated from scratch. The revision is saved to "
+             "<output>/storyboard.refined.md (your original file is untouched).",
+    )
+    parser.add_argument("--skip-youtube", action="store_true",
+                        help="Don't generate youtube/<lang>/youtube.txt")
+    parser.add_argument("--skip-dep-check", action="store_true",
+                        help="Don't validate / auto-install dependencies before building")
+    parser.add_argument("--no-ai-cli-check", action="store_true",
+                        help="Skip the AI CLI presence check even if the storyboard declares one")
+    return parser
+
+
+def options_from_args(args: argparse.Namespace) -> BuildOptions:
+    """Convert parsed argparse output into a :class:`BuildOptions`."""
+    return BuildOptions(
+        storyboard=Path(args.storyboard),
+        output=Path(args.output),
+        stage=args.stage,
+        only=args.only,
+        force=args.force,
+        ai_cli=args.ai_cli,
+        tts=args.tts,
+        voice=args.voice,
+        gemini_api_key=args.gemini_api_key,
+        check_layout=args.check_layout,
+        repair_attempts=args.repair_attempts,
+        validate_scenes=args.validate_scenes,
+        validate_attempts=args.validate_attempts,
+        refine_storyboard=args.refine_storyboard,
+        skip_youtube=args.skip_youtube,
+        skip_dep_check=args.skip_dep_check,
+        no_ai_cli_check=args.no_ai_cli_check,
+    )
+
+
+def main(argv: Optional[Sequence[str]] = None) -> None:
+    args = build_parser().parse_args(argv)
+    run_build(options_from_args(args))

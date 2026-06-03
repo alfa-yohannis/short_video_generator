@@ -1,0 +1,311 @@
+"""Generating (and repairing) the Manim scene ``.py`` files with an AI client.
+
+`SceneSynthesizer` owns everything about turning a scene's description +
+narration into a runnable Manim source file:
+
+* copying the shared template (`_common.py`, fonts) into the output,
+* building the prompt and asking the AI to write the scene,
+* cleaning + syntax-checking the reply, and
+* re-asking the AI to *fix* a scene that later fails to render (the renderer
+  calls :meth:`repair` for that).
+
+It depends on an :class:`~vgen.ai_client.AiClient`, injected in the constructor.
+"""
+
+from __future__ import annotations
+
+import shutil
+import time
+from pathlib import Path
+from typing import TYPE_CHECKING, Optional, Tuple
+
+from . import config
+from .ai_client import AiClient
+from .models import Scene, Storyboard
+from .progress import progress
+from .text_utils import (
+    escape_unsafe_ampersands,
+    strip_code_fences,
+    validate_python_source,
+)
+
+if TYPE_CHECKING:  # only for type hints — avoids a runtime import cycle
+    from .renderer import SceneValidator
+
+
+class SceneSynthesizer:
+    """Creates and repairs Manim scene files for a storyboard.
+
+    When given a ``validator`` and ``validate_attempts > 0``, each scene is
+    *checked the moment it is generated*: it's render-validated against the
+    layout rules and, if it fails, refined and re-checked in a loop until it
+    passes or the attempts run out — so the real render only ever sees scenes
+    that already pass.
+    """
+
+    def __init__(self, ai_client: AiClient,
+                 validator: "Optional[SceneValidator]" = None,
+                 validate_attempts: int = 0) -> None:
+        self.ai = ai_client
+        self.validator = validator
+        self.validate_attempts = validate_attempts
+
+    # --- template materialization -----------------------------------------
+
+    def materialize_dir(self, storyboard: Storyboard, output: Path, orient: str) -> Path:
+        """Decide the scenes directory for an orientation, copying templates in.
+
+        If the storyboard names an existing directory, use it as-is (the user
+        brought their own sources). Otherwise the canonical location is
+        ``<output>/scenes_<orient>/`` and the bundled ``_common.py`` + fonts are
+        copied in (and refreshed whenever the template changes).
+        """
+        declared = storyboard.scenes_dir(orient)
+        if declared is not None and declared.exists():
+            return declared
+        target = (output / f"scenes_{orient}").resolve()
+        target.mkdir(parents=True, exist_ok=True)
+
+        template_common = config.TEMPLATES_DIR / f"scenes_{orient}" / "_common.py"
+        target_common = target / "_common.py"
+        if template_common.exists() and (
+            not target_common.exists()
+            or target_common.read_bytes() != template_common.read_bytes()
+        ):
+            shutil.copy2(template_common, target_common)
+
+        assets_target = output / "assets"
+        if not assets_target.exists() and (config.TEMPLATES_DIR / "assets").exists():
+            shutil.copytree(config.TEMPLATES_DIR / "assets", assets_target)
+        return target
+
+    def ensure_all(self, storyboard: Storyboard, output: Path, force: bool) -> Tuple[Path, Path]:
+        """Make sure every scene ``.py`` exists for both orientations.
+
+        Updates ``storyboard.scenes_landscape_dir`` / ``scenes_portrait_dir`` to
+        the directories actually used, and returns them.
+        """
+        landscape_dir = self.materialize_dir(storyboard, output, "landscape")
+        portrait_dir = self.materialize_dir(storyboard, output, "portrait")
+        storyboard.scenes_landscape_dir = landscape_dir
+        storyboard.scenes_portrait_dir = portrait_dir
+
+        skeleton = self._read_skeleton()
+        for orient, scenes_dir in (("landscape", landscape_dir), ("portrait", portrait_dir)):
+            common_src = self._read_common(scenes_dir)
+            for scene in storyboard.scenes:
+                scene_path = scenes_dir / scene.file
+                if scene_path.exists() and not force:
+                    continue
+                if storyboard.ai_cli in ("", "none", None):
+                    raise SystemExit(
+                        f"Scene file {scene_path} is missing and no ai_cli is "
+                        "configured to generate it. Either drop the .py in place "
+                        "or set `ai_cli: claude` in the storyboard front-matter."
+                    )
+                self._generate_one(storyboard, output, scene, orient, scene_path,
+                                   skeleton, common_src)
+        return landscape_dir, portrait_dir
+
+    # --- generation + repair ----------------------------------------------
+
+    def _generate_one(self, storyboard: Storyboard, output: Path, scene: Scene,
+                      orient: str, scene_path: Path, skeleton: str, common_src: str) -> None:
+        progress.log(f"  ai-generate {orient}/{scene.file} via {self.ai.name}…")
+        started = time.monotonic()
+        prompt = self.build_prompt(storyboard, scene, orient, skeleton, common_src)
+        source = strip_code_fences(self.ai.generate(prompt))
+        if not source.strip():
+            raise SystemExit(f"AI returned empty source for {scene_path}")
+        source = escape_unsafe_ampersands(source)
+        validate_python_source(scene_path, source)
+        scene_path.write_text(source.rstrip() + "\n", encoding="utf-8")
+        progress.log(f"    ↳ {orient}/{scene.file} in {time.monotonic() - started:.1f}s")
+        self._validate_and_fix(storyboard, output, scene, orient, scene_path)
+
+    def _validate_and_fix(self, storyboard: Storyboard, output: Path, scene: Scene,
+                          orient: str, scene_path: Path) -> None:
+        """Render-check a just-generated scene and refine it until it passes.
+
+        Renders the scene (low quality, strict layout check) for each language;
+        on the first failure it asks the AI to fix the scene and checks again,
+        up to ``validate_attempts`` times. No-op unless a validator is wired in.
+        """
+        if self.validator is None or self.validate_attempts <= 0:
+            return
+        scenes_dir = scene_path.parent
+        for attempt in range(1, self.validate_attempts + 1):
+            failure = None
+            for lang in storyboard.languages:
+                ok, problem, is_layout = self.validator.check_scene(
+                    storyboard, output, scenes_dir, scene, orient, lang)
+                if not ok:
+                    failure = (lang, problem, is_layout)
+                    break
+            if failure is None:
+                progress.log(f"    ✓ {orient}/{scene.basename} passes the layout check")
+                return
+            lang, problem, is_layout = failure
+            if attempt >= self.validate_attempts:
+                raise SystemExit(
+                    f"{orient}/{scene.basename} still violates the checks after "
+                    f"{self.validate_attempts} refine attempt(s) [{lang}]: {problem}"
+                )
+            kind = "layout violation" if is_layout else "render error"
+            progress.log(f"    {kind} in {orient}/{scene.basename} [{lang}], refining "
+                         f"(attempt {attempt}/{self.validate_attempts})… {problem}")
+            self.repair(storyboard, scene, orient, scene_path, problem, is_layout)
+
+    def repair(self, storyboard: Storyboard, scene: Scene, orient: str,
+               scene_path: Path, problem: str, is_layout: bool) -> None:
+        """Ask the AI to fix a scene that failed (a render crash or a layout
+        violation), then overwrite the file in place. Called by the renderer."""
+        scenes_dir = scene_path.parent
+        common_src = self._read_common(scenes_dir)
+        skeleton = self._read_skeleton()
+        current_src = scene_path.read_text(encoding="utf-8")
+        prompt = self._build_repair_prompt(
+            storyboard, scene, orient, skeleton, common_src, current_src, problem, is_layout
+        )
+        new_src = strip_code_fences(self.ai.generate(prompt))
+        if not new_src.strip():
+            raise SystemExit(f"AI returned empty source repairing {scene_path}")
+        new_src = escape_unsafe_ampersands(new_src)
+        validate_python_source(scene_path, new_src)
+        scene_path.write_text(new_src.rstrip() + "\n", encoding="utf-8")
+
+    # --- prompts -----------------------------------------------------------
+
+    def build_prompt(self, storyboard: Storyboard, scene: Scene, orient: str,
+                     skeleton: str, common_src: str) -> str:
+        """The prompt that asks the AI to write one Manim scene file."""
+        other_orient = "portrait" if orient == "landscape" else "landscape"
+        portrait_note = ""
+        if orient == "portrait":
+            portrait_note = (
+                "\nPortrait constraint: frame is 9 wide x 16 tall in Manim units, "
+                "rendered at 1080x1920. Keep ALL visible content above "
+                "SHORTS_SAFE_BOTTOM = -4.8 (the bottom 2/10 of the frame is "
+                "reserved for Reels/Shorts/TikTok caption overlays). Use "
+                "fit_to_shorts_area() to compress wide groups when needed.\n"
+            )
+        return f"""You are generating one Manim scene file for a tutorial video.
+
+PROJECT TITLE: {storyboard.title}
+PROJECT BRIEF:
+{storyboard.project_brief}
+
+SCENE BASENAME: {scene.basename}
+SCENE CLASS:    {scene.classname}
+ORIENTATION:    {orient} (a parallel file will exist for {other_orient})
+FALLBACK DURATION: {scene.fallback_duration:.1f} seconds
+SCENE DESCRIPTION:
+{scene.description or "(no description provided)"}
+
+LOCALIZED NARRATION (timed to fit the scene; visuals should illustrate this):
+
+[id] {scene.narration.get("id", "(missing)").strip()}
+
+[en] {scene.narration.get("en", "(missing)").strip()}
+{portrait_note}
+HELPERS AVAILABLE FROM `_common` (reproduced verbatim below for reference):
+```python
+{common_src}
+```
+
+REFERENCE SKELETON (the structure your output MUST follow — same imports,
+same TARGET_DURATION assignment, same Scene subclass, same final wait):
+```python
+{skeleton}
+```
+
+REQUIREMENTS:
+- Output ONLY a complete valid Python file, no markdown fences, no commentary.
+- First line: `from manim import *`
+- Second line group: `from _common import (...)` importing every helper you use.
+- Module-level: `TARGET_DURATION = audio_duration("{scene.basename}", {scene.fallback_duration:.1f})`
+- Exactly one class: `class {scene.classname}(Scene):` with a single `construct` method.
+- `self.add(tech_background())` at the very start of `construct`.
+- Wrap every user-visible string with `L("teks Indonesia", "english text")`.
+- Avoid orientation words ("left", "right", "above", "below") in any visible string.
+- End `construct` with `self.wait(max(0.5, TARGET_DURATION - elapsed))` where
+  `elapsed` is the sum of the `run_time` values you used.
+- Use only helpers documented in the `_common` source above; do not import
+  anything else.
+- Keep visuals clean and instructional. Use semantic colors: DANGER for
+  problems/naive code, OK for improved/refactored states, HIGHLIGHT for the
+  currently-discussed element, PRIMARY for headline statements, ACCENT for
+  section labels and emphasis.
+- `title_bar`, `title_text`, `body_text`, `section_label`, and `bullet_list`
+  all feed their text into Pango `MarkupText`, which parses Pango XML markup.
+  Every `&` in those strings MUST be written as `&amp;`, every `<` as `&lt;`,
+  every `>` as `&gt;`. Do not put raw ampersands or angle brackets inside
+  any string that ends up in `L(...)`, `title_bar(...)`, `title_text(...)`,
+  `body_text(...)`, `section_label(...)`, or `bullet_list([...])` items.
+- Code shown via `code_card(...)` is NOT Pango markup; raw `&`, `<`, `>`
+  are fine there.
+
+Return ONLY the Python file contents.
+"""
+
+    def _build_repair_prompt(self, storyboard: Storyboard, scene: Scene, orient: str,
+                             skeleton: str, common_src: str, current_src: str,
+                             problem: str, is_layout: bool) -> str:
+        base = self.build_prompt(storyboard, scene, orient, skeleton, common_src)
+        if is_layout:
+            safe_note = ""
+            if orient == "portrait":
+                safe_note = (" and entirely above SHORTS_SAFE_BOTTOM = -4.8 (the bottom "
+                             "2/10 reserved for caption overlays)")
+            fix = f"""
+
+LAYOUT REPAIR — IMPORTANT:
+A previous version of this exact scene FAILED an automated layout check with:
+{problem}
+
+Here is that failing scene source:
+```python
+{current_src}
+```
+
+Produce a corrected COMPLETE scene file that preserves the same content, timing
+(`TARGET_DURATION`, `run_time` values, final wait) and instructional intent, but
+guarantees every visible text mobject stays fully inside the frame{safe_note},
+with no two text labels overlapping by more than half the smaller one. Fix it by
+repositioning, reducing font `size=`, wrapping long strings onto multiple lines,
+arranging with VGroup(...).arrange(...), or (portrait) fit_to_shorts_area(...).
+Return ONLY the corrected Python file, no fences, no commentary.
+"""
+        else:
+            fix = f"""
+
+RENDER REPAIR — IMPORTANT:
+A previous version of this exact scene FAILED to render with this error:
+{problem}
+
+Here is that failing scene source:
+```python
+{current_src}
+```
+
+Produce a corrected COMPLETE scene file that fixes the error while preserving the
+same content, timing (`TARGET_DURATION`, `run_time` values, final wait) and
+instructional intent. Common causes: a NameError from a colour/constant or helper
+that is NOT defined in the `_common` source above; a wrong/typo'd argument to a
+helper; calling a constant like a function. Use ONLY names, colours and helpers
+that actually appear in the `_common` source above — do not invent constants.
+Return ONLY the corrected Python file, no fences, no commentary.
+"""
+        return base + fix
+
+    # --- small file readers ------------------------------------------------
+
+    @staticmethod
+    def _read_skeleton() -> str:
+        path = config.TEMPLATES_DIR / "scene_skeleton.py"
+        return path.read_text(encoding="utf-8") if path.exists() else ""
+
+    @staticmethod
+    def _read_common(scenes_dir: Path) -> str:
+        path = scenes_dir / "_common.py"
+        return path.read_text(encoding="utf-8") if path.exists() else ""

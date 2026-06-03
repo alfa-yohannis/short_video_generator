@@ -1,10 +1,10 @@
-"""Shared pytest fixtures/helpers for the video_generator test suite.
+"""Shared pytest fixtures/helpers for the ``vgen`` package test suite.
 
-`video_generator/generate_video.py` runs `_bootstrap_venv()` at import time,
-which would create `<repo>/.venv` and re-exec the interpreter. We neutralise
-that by setting the marker env var the bootstrap checks for, then load the file
-as a plain module. Past the (skipped) bootstrap the module is import-side-effect
-free — its `yaml` / `srt` imports are lazy, inside functions.
+The implementation now lives in the ``vgen`` package (under ``video_generator/``)
+rather than one big module, so tests import the specific classes/functions they
+exercise. This file puts the package on the import path, provides a couple of
+builders (a storyboard markdown writer, an in-memory ``Storyboard``, a fake AI
+client) and the media fixtures the integration tests need.
 """
 
 from __future__ import annotations
@@ -15,82 +15,66 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-GV_PATH = REPO_ROOT / "video_generator" / "generate_video.py"
+GENERATOR_ROOT = REPO_ROOT / "video_generator"
+TEMPLATES = GENERATOR_ROOT / "templates"
+
+# Make ``import vgen.<module>`` work. The marker env var stops the package's
+# bootstrap from ever trying to create/enter a venv (we never import bootstrap
+# here, but set it defensively).
+os.environ.setdefault("VIDEO_GENERATOR_VENV", "1")
+if str(GENERATOR_ROOT) not in sys.path:
+    sys.path.insert(0, str(GENERATOR_ROOT))
 
 
-def _load_module():
-    # Skip the venv bootstrap/re-exec.
-    os.environ.setdefault("VIDEO_GENERATOR_VENV", "1")
-    spec = importlib.util.spec_from_file_location("generate_video", GV_PATH)
-    module = importlib.util.module_from_spec(spec)
-    assert spec and spec.loader
-    # Register before exec so the @dataclass string annotations ("str | None")
-    # resolve against a module that's already in sys.modules.
-    sys.modules["generate_video"] = module
-    spec.loader.exec_module(module)
-    return module
+# --- builders --------------------------------------------------------------
 
 
-# Loaded once; reused across tests.
-gv = _load_module()
+def make_storyboard(**overrides):
+    """A small in-memory :class:`vgen.models.Storyboard` for resolver/logic tests."""
+    from vgen import config
+    from vgen.models import Storyboard
+
+    defaults = dict(
+        title="t", languages=["id", "en"], orientations=["landscape", "portrait"],
+        voices={}, tts_provider="edge", gemini_model=config.DEFAULT_GEMINI_MODEL,
+        gemini_api_key=None, ai_cli="claude", fps=30,
+        resolution_landscape=(1920, 1080), scenes_landscape_dir=None,
+        scenes_portrait_dir=None, scenes=[], project_brief="",
+    )
+    defaults.update(overrides)
+    return Storyboard(**defaults)
+
+
+class FakeAiClient:
+    """A stand-in :class:`~vgen.ai_client.AiClient` that returns a canned reply.
+
+    ``reply`` may be a string or a ``callable(prompt) -> str``. Every prompt it
+    receives is recorded on ``.prompts`` so tests can assert on what was asked.
+    """
+
+    name = "fake"
+
+    def __init__(self, reply="") -> None:
+        self.reply = reply
+        self.prompts = []
+
+    def generate(self, prompt: str) -> str:
+        self.prompts.append(prompt)
+        return self.reply(prompt) if callable(self.reply) else self.reply
 
 
 @pytest.fixture()
-def g():
-    """The loaded generate_video module under test."""
-    return gv
+def fake_ai():
+    return FakeAiClient()
 
 
-# --- scene _common loaders (need manim) ------------------------------------
-
-TEMPLATES = REPO_ROOT / "video_generator" / "templates"
-
-
-def _load_scene_common(subdir: str, modname: str):
-    """Import a scene `_common.py` under a unique module name. Skips the test
-    when manim / manimpango aren't importable in this interpreter."""
-    path = TEMPLATES / subdir / "_common.py"
-    sys.path.insert(0, str(path.parent))
-    spec = importlib.util.spec_from_file_location(modname, path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[modname] = module
-    try:
-        spec.loader.exec_module(module)
-    except Exception as exc:  # pragma: no cover - depends on env
-        pytest.skip(f"cannot import {subdir}/_common.py ({exc})")
-    # Creating a MarkupText caches an SVG under config.media_dir/texts, which
-    # defaults to ./media (the CWD). Redirect it into the system temp dir so the
-    # test suite never writes a media/ folder into the repo.
-    import tempfile
-    module.config.media_dir = str(Path(tempfile.gettempdir()) / "vg_test_media")
-    return module
-
-
-@pytest.fixture(scope="session")
-def landscape_common():
-    return _load_scene_common("scenes_landscape", "_common_landscape")
-
-
-@pytest.fixture(scope="session")
-def portrait_common():
-    return _load_scene_common("scenes_portrait", "_common_portrait")
-
-
-# --- skip markers ----------------------------------------------------------
-
-
-def requires(*binaries: str):
-    """Skip an integration test when a required external tool is missing."""
-    missing = [x for x in binaries if not shutil.which(x)]
-    return pytest.mark.skipif(bool(missing), reason=f"missing tools: {', '.join(missing)}")
-
-
-# --- storyboard builder ----------------------------------------------------
+# --- storyboard markdown writer --------------------------------------------
 
 
 def storyboard_text(
@@ -108,16 +92,10 @@ def storyboard_text(
     brief: str = "A short tutorial used by the test suite.",
     scenes=None,
 ) -> str:
-    """Build a storyboard markdown document.
-
-    `scenes` is a list of dicts with keys: basename, classname (optional),
-    file (optional), duration (optional), description (optional),
-    narration (optional dict of lang->text).
-    """
+    """Build a storyboard markdown document for parser tests."""
     if scenes is None:
         scenes = [{
-            "basename": "01_intro",
-            "classname": "Intro",
+            "basename": "01_intro", "classname": "Intro",
             "description": "Title card introducing the topic.",
             "narration": {"id": "Halo dunia.", "en": "Hello world."},
         }]
@@ -170,13 +148,51 @@ def write_storyboard(path: Path, **kwargs) -> Path:
     return path
 
 
+# --- scene _common loaders (need manim) ------------------------------------
+
+
+def _load_scene_common(subdir: str, modname: str):
+    """Import a scene ``_common.py`` under a unique module name (skips if manim
+    isn't importable)."""
+    path = TEMPLATES / subdir / "_common.py"
+    sys.path.insert(0, str(path.parent))
+    spec = importlib.util.spec_from_file_location(modname, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[modname] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:  # pragma: no cover - depends on env
+        pytest.skip(f"cannot import {subdir}/_common.py ({exc})")
+    module.config.media_dir = str(Path(tempfile.gettempdir()) / "vg_test_media")
+    return module
+
+
+@pytest.fixture(scope="session")
+def landscape_common():
+    return _load_scene_common("scenes_landscape", "_common_landscape")
+
+
+@pytest.fixture(scope="session")
+def portrait_common():
+    return _load_scene_common("scenes_portrait", "_common_portrait")
+
+
+# --- skip markers ----------------------------------------------------------
+
+
+def requires(*binaries: str):
+    """Skip an integration test when a required external tool is missing."""
+    missing = [x for x in binaries if not shutil.which(x)]
+    return pytest.mark.skipif(bool(missing), reason=f"missing tools: {', '.join(missing)}")
+
+
 # --- media fixtures (ffmpeg) -----------------------------------------------
 
 
 def silent_mp3(path: Path, seconds: float = 1.0) -> Path:
     subprocess.run(
         ["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi",
-         "-i", f"anullsrc=r=24000:cl=mono", "-t", str(seconds),
+         "-i", "anullsrc=r=24000:cl=mono", "-t", str(seconds),
          "-c:a", "libmp3lame", "-q:a", "9", str(path)],
         check=True,
     )
@@ -185,7 +201,6 @@ def silent_mp3(path: Path, seconds: float = 1.0) -> Path:
 
 def color_video(path: Path, seconds: float = 1.0, w: int = 320, h: int = 180,
                 fps: int = 30) -> Path:
-    """A short silent H.264 video (color source) for mux/concat tests."""
     subprocess.run(
         ["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi",
          "-i", f"color=c=navy:s={w}x{h}:r={fps}", "-t", str(seconds),

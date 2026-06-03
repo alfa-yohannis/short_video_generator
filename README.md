@@ -19,11 +19,6 @@ code** — just a description per scene. When narration or a scene `.py` file is
 missing, the configured AI CLI writes it from the description. Both the narrator
 and the TTS engine are swappable.
 
-> **This is the Manim backend.** There's also a web backend that renders scenes
-> as HTML/CSS with Mermaid diagrams, animated with anime.js and captured via
-> Playwright — same storyboard and pipeline, different engine — documented
-> separately in [README_HTML.md](README_HTML.md).
-
 ---
 
 ## Features

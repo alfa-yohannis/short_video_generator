@@ -1,9 +1,9 @@
-"""Unit tests for the pure helpers in video_generator/generate_video.py.
+"""Unit tests for the ``vgen`` package — pure logic, no external tools/network.
 
-These cover the storyboard parser, voice/key resolution, timestamp + estimated
-SRT math, the Pango ampersand-escape pass, the AST syntax guard, prompt
-construction, the TTS dispatch, and the Gemini HTTP response parsing (urlopen
-mocked). No external tools or network needed.
+Organised by module: text helpers, the storyboard parser, subtitle math, the
+TTS Strategy classes, the duration fitter, prompts, render-output parsing, the
+YouTube helpers, and the CLI overrides. Network/ffmpeg behaviour lives in
+``test_integration.py``.
 """
 
 from __future__ import annotations
@@ -11,548 +11,339 @@ from __future__ import annotations
 import io
 import json
 import re
-from argparse import Namespace
 
 import pytest
 
-from conftest import storyboard_text, write_storyboard
+from conftest import make_storyboard, write_storyboard, FakeAiClient
+
+from vgen import config, media, renderer, subtitles, text_utils, youtube
+import vgen.tts as tts_mod
+from vgen.duration import DurationFitter, count_words, estimate_seconds
+from vgen.models import Scene
+from vgen.narration import NarrationWriter
+from vgen.pipeline import BuildOptions, apply_cli_overrides, _scenes_changed
+from vgen.refine import StoryboardRefiner
+from vgen.scenes import SceneSynthesizer
+from vgen.storyboard import StoryboardParser, parse_duration_spec
+from vgen.tts import (
+    EdgeTtsEngine, GeminiQuotaError, GeminiTtsEngine, create_tts_engine,
+    gemini_error_message, is_daily_quota, request_gemini_audio, resolve_gemini_key,
+)
+from vgen.youtube import YouTubeMetadataWriter
 
 
-# --- name helpers ----------------------------------------------------------
+# --- text_utils: name helpers, fences, escapes, validation -----------------
 
 
-def test_camel_from_snake(g):
-    assert g._camel_from_snake("strategy_pattern") == "StrategyPattern"
-    assert g._camel_from_snake("pengantar") == "Pengantar"
-    assert g._camel_from_snake("a-b c") == "ABC"
+def test_camel_from_snake():
+    assert text_utils.camel_from_snake("strategy_pattern") == "StrategyPattern"
+    assert text_utils.camel_from_snake("a-b c") == "ABC"
 
 
-def test_strip_leading_digits(g):
-    assert g._strip_leading_digits("01_pengantar") == "pengantar"
-    assert g._strip_leading_digits("12-intro") == "intro"
-    assert g._strip_leading_digits("plain") == "plain"
+def test_strip_leading_digits():
+    assert text_utils.strip_leading_digits("01_pengantar") == "pengantar"
+    assert text_utils.strip_leading_digits("plain") == "plain"
 
 
-# --- scene parsing ---------------------------------------------------------
+def test_strip_code_fences_plain():
+    assert text_utils.strip_code_fences("from manim import *\n") == "from manim import *"
 
 
-def test_parse_scene_header_basename_and_class(g):
-    sc = g.parse_scene("01_pengantar / Pengantar", "### description\nHi.\n")
-    assert sc.basename == "01_pengantar"
-    assert sc.classname == "Pengantar"
-    assert sc.description == "Hi."
+def test_strip_code_fences_fenced():
+    text = "```python\nfrom manim import *\nx = 1\n```"
+    assert text_utils.strip_code_fences(text) == "from manim import *\nx = 1"
 
 
-def test_parse_scene_class_meta_overrides_header(g):
-    sc = g.parse_scene("01_x / FromHeader", "**class:** FromMeta\n")
-    assert sc.classname == "FromMeta"
+def test_strip_code_fences_drops_prose_preamble():
+    text = "Here is scene 6, the conclusion, about 30s long:\nfrom manim import *\nx = 1\n"
+    assert text_utils.strip_code_fences(text) == "from manim import *\nx = 1"
 
 
-def test_parse_scene_classname_derived_when_absent(g):
-    sc = g.parse_scene("03_segitiga_siku", "")
-    assert sc.classname == "SegitigaSiku"  # camel-cased, digits stripped
+def test_strip_code_fences_keeps_clean_source():
+    src = "from manim import *\nfrom _common import title_text\n\nclass S(Scene):\n    pass"
+    assert text_utils.strip_code_fences(src) == src
 
 
-def test_parse_scene_file_and_duration(g):
-    sc = g.parse_scene("01_x / X", "**file:** scene_x.py\n**fallback_duration:** 14\n")
-    assert sc.file == "scene_x.py"
-    assert sc.fallback_duration == 14.0
+def test_escape_bare_ampersand_in_literal():
+    assert text_utils.escape_unsafe_ampersands('x = "Tom & Jerry"') == 'x = "Tom &amp; Jerry"'
 
 
-def test_parse_scene_defaults_file_and_duration(g):
-    sc = g.parse_scene("01_x / X", "### description\nno meta here\n")
-    assert sc.file == "scene_01_x.py"
-    assert sc.fallback_duration == 15.0
+def test_escape_leaves_known_entities():
+    src = '"a &amp; b &lt; c &#39;d"'
+    assert text_utils.escape_unsafe_ampersands(src) == src
 
 
-def test_parse_scene_narration_and_extras(g):
-    body = (
-        "**file:** s.py\n"
-        "### description\nA card.\n"
-        "### narration.id\nHalo.\n"
-        "### narration.en\nHello.\n"
-        "### notes\nremember this\n"
-    )
-    sc = g.parse_scene("01_x / X", body)
+def test_escape_ignores_ampersand_outside_strings():
+    assert text_utils.escape_unsafe_ampersands("flags = A & B") == "flags = A & B"
+
+
+def test_escape_idempotent():
+    once = text_utils.escape_unsafe_ampersands('t("R&D")')
+    assert once == 't("R&amp;D")'
+    assert text_utils.escape_unsafe_ampersands(once) == once
+
+
+def test_validate_python_source_ok(tmp_path):
+    text_utils.validate_python_source(tmp_path / "s.py", "x = 1\ndef f():\n    return x\n")
+
+
+def test_validate_python_source_syntax_error(tmp_path):
+    with pytest.raises(SystemExit) as ei:
+        text_utils.validate_python_source(tmp_path / "s.py", "def f(:\n  pass\n")
+    assert "not valid Python" in str(ei.value)
+
+
+# --- storyboard parser -----------------------------------------------------
+
+
+@pytest.fixture()
+def parser():
+    return StoryboardParser()
+
+
+def test_parse_scene_header_basename_and_class(parser):
+    sc = parser.parse_scene("01_pengantar / Pengantar", "### description\nHi.\n")
+    assert sc.basename == "01_pengantar" and sc.classname == "Pengantar" and sc.description == "Hi."
+
+
+def test_parse_scene_class_meta_overrides_header(parser):
+    assert parser.parse_scene("01_x / FromHeader", "**class:** FromMeta\n").classname == "FromMeta"
+
+
+def test_parse_scene_classname_derived_when_absent(parser):
+    assert parser.parse_scene("03_segitiga_siku", "").classname == "SegitigaSiku"
+
+
+def test_parse_scene_file_and_duration(parser):
+    sc = parser.parse_scene("01_x / X", "**file:** scene_x.py\n**fallback_duration:** 14\n")
+    assert sc.file == "scene_x.py" and sc.fallback_duration == 14.0
+
+
+def test_parse_scene_defaults_file_and_duration(parser):
+    sc = parser.parse_scene("01_x / X", "### description\nno meta here\n")
+    assert sc.file == "scene_01_x.py" and sc.fallback_duration == 15.0
+
+
+def test_parse_scene_narration_and_extras(parser):
+    body = ("**file:** s.py\n### description\nA card.\n"
+            "### narration.id\nHalo.\n### narration.en\nHello.\n### notes\nremember this\n")
+    sc = parser.parse_scene("01_x / X", body)
     assert sc.description == "A card."
     assert sc.narration == {"id": "Halo.", "en": "Hello."}
     assert sc.extras["notes"] == "remember this"
-    # metadata lines must not bleed into the description
     assert "**file:**" not in sc.description
 
 
-# --- storyboard parsing ----------------------------------------------------
-
-
-def test_parse_storyboard_full(g, tmp_path):
+def test_parse_storyboard_full(parser, tmp_path):
     p = write_storyboard(
-        tmp_path / "sb.md",
-        title="pythagorean",
+        tmp_path / "sb.md", title="pythagorean",
         voices={"id": "id-ID-ArdiNeural", "en": "en-US-GuyNeural"},
-        tts_provider="gemini",
-        gemini_model="gemini-2.5-flash-preview-tts",
+        tts_provider="gemini", gemini_model="gemini-2.5-flash-preview-tts",
         gemini_api_key="from-front-matter",
-        scenes=[
-            {"basename": "01_a", "classname": "A", "narration": {"id": "x", "en": "y"}},
-            {"basename": "02_b", "classname": "B", "narration": {"id": "p", "en": "q"}},
-        ],
+        scenes=[{"basename": "01_a", "classname": "A", "narration": {"id": "x", "en": "y"}},
+                {"basename": "02_b", "classname": "B", "narration": {"id": "p", "en": "q"}}],
     )
-    sb = g.parse_storyboard(p)
-    assert sb.title == "pythagorean"
-    assert sb.tts_provider == "gemini"
+    sb = parser.parse(p)
+    assert sb.title == "pythagorean" and sb.tts_provider == "gemini"
     assert sb.gemini_model == "gemini-2.5-flash-preview-tts"
     assert sb.gemini_api_key == "from-front-matter"
     assert sb.voices == {"id": "id-ID-ArdiNeural", "en": "en-US-GuyNeural"}
     assert [s.basename for s in sb.scenes] == ["01_a", "02_b"]
-    assert sb.project_brief  # captured from the body before the first scene
+    assert sb.project_brief
 
 
-def test_parse_storyboard_defaults(g, tmp_path):
-    # Minimal front-matter: no tts_provider, ai_cli, gemini_*; defaults apply.
-    text = (
-        "---\n"
-        "title: minimal\n"
-        "---\n\n"
-        "Brief.\n\n"
-        "## Scene: 01_only / Only\n\n"
-        "### description\nA scene.\n"
-    )
+def test_parse_storyboard_defaults(parser, tmp_path):
+    text = ("---\ntitle: minimal\n---\n\nBrief.\n\n"
+            "## Scene: 01_only / Only\n\n### description\nA scene.\n")
     p = tmp_path / "min.md"
     p.write_text(text, encoding="utf-8")
-    sb = g.parse_storyboard(p)
-    assert sb.tts_provider == "edge"
-    assert sb.ai_cli == "claude"
-    assert sb.gemini_model == g.DEFAULT_GEMINI_MODEL
-    assert sb.gemini_api_key is None
-    assert sb.languages == ["id", "en"]
-    assert sb.orientations == ["landscape", "portrait"]
+    sb = parser.parse(p)
+    assert sb.tts_provider == "edge" and sb.ai_cli == "claude"
+    assert sb.gemini_model == config.DEFAULT_GEMINI_MODEL and sb.gemini_api_key is None
+    assert sb.languages == ["id", "en"] and sb.orientations == ["landscape", "portrait"]
 
 
-def test_parse_storyboard_requires_front_matter(g, tmp_path):
+def test_parse_storyboard_requires_front_matter(parser, tmp_path):
     p = tmp_path / "no_fm.md"
     p.write_text("# just a heading\n\n## Scene: 01_x / X\n", encoding="utf-8")
     with pytest.raises(SystemExit):
-        g.parse_storyboard(p)
+        parser.parse(p)
 
 
-def test_parse_storyboard_requires_a_scene(g, tmp_path):
+def test_parse_storyboard_requires_a_scene(parser, tmp_path):
     p = tmp_path / "no_scene.md"
     p.write_text("---\ntitle: t\n---\n\nJust a brief, no scenes.\n", encoding="utf-8")
     with pytest.raises(SystemExit):
-        g.parse_storyboard(p)
+        parser.parse(p)
 
 
-def test_parse_storyboard_resolves_scene_dirs_relative(g, tmp_path):
+def test_parse_storyboard_resolves_scene_dirs_relative(parser, tmp_path):
     (tmp_path / "land").mkdir()
     p = write_storyboard(tmp_path / "sb.md", scenes_landscape_dir="land")
-    sb = g.parse_storyboard(p)
+    sb = parser.parse(p)
     assert sb.scenes_landscape_dir == (tmp_path / "land").resolve()
     assert sb.scenes_portrait_dir is None
 
 
-# --- narration duration estimate + compress-to-cap -------------------------
+def test_peek_ai_cli_reads_front_matter(tmp_path):
+    p = write_storyboard(tmp_path / "sb.md", ai_cli="codex")
+    assert StoryboardParser.peek_ai_cli(p) == "codex"
 
 
-def test_estimate_seconds(g):
-    assert g._estimate_seconds("one two three four") == pytest.approx(4 / g._ESTIMATE_WPS)
-    assert g._estimate_seconds("") == 0.0
-
-
-def test_fit_narration_to_cap_compresses_when_over(g, tmp_path, monkeypatch):
-    long_id = " ".join(["kata"] * 300)   # 300 words ≈ 150s est. per scene
-    sb = _sb(g, languages=["id"], max_duration=60.0,
-             scenes=[g.Scene("01_a", "A", "s.py", 30, "d", {"id": long_id}),
-                     g.Scene("02_b", "B", "s.py", 30, "d", {"id": long_id})])
-    (tmp_path / "scripts" / "id").mkdir(parents=True)
-    # compress = keep the first N words (deterministic, no AI)
-    monkeypatch.setattr(g, "_compress_narration",
-                        lambda sb_, lang, cur, n: " ".join(cur.split()[:n]))
-    g._fit_narration_to_cap(sb, tmp_path)
-    total = sum(g._estimate_seconds(s.narration["id"]) for s in sb.scenes)
-    assert total <= 60.0                                  # now within the cap
-    # the script files were rewritten to the shorter text
-    assert (tmp_path / "scripts" / "id" / "01_a.txt").read_text().split()[:1] == ["kata"]
-    assert len((tmp_path / "scripts" / "id" / "01_a.txt").read_text().split()) < 300
-
-
-def test_fit_narration_noop_without_max_duration(g, tmp_path, monkeypatch):
-    called = {"n": 0}
-    monkeypatch.setattr(g, "_compress_narration",
-                        lambda *a, **k: called.__setitem__("n", called["n"] + 1) or "x")
-    sb = _sb(g, languages=["id"], max_duration=None,
-             scenes=[g.Scene("01_a", "A", "s.py", 30, "d", {"id": " ".join(["w"] * 999)})])
-    g._fit_narration_to_cap(sb, tmp_path)
-    assert called["n"] == 0   # no cap → never compresses
+def test_peek_ai_cli_missing_returns_none(tmp_path):
+    p = tmp_path / "x.md"
+    p.write_text("no front matter here", encoding="utf-8")
+    assert StoryboardParser.peek_ai_cli(p) is None
 
 
 # --- duration spec + max-duration budget -----------------------------------
 
 
 @pytest.mark.parametrize("value,expected", [
-    (180, 180.0),
-    (90.5, 90.5),
-    ("180", 180.0),
-    ("3 minutes", 180.0),
-    ("3 min", 180.0),
-    ("1.5 min", 90.0),
-    ("90s", 90.0),
-    ("45 seconds", 45.0),
-    ("2:30", 150.0),
-    ("1:00:00", 3600.0),
-    (None, None),
-    ("", None),
+    (180, 180.0), (90.5, 90.5), ("180", 180.0), ("3 minutes", 180.0), ("3 min", 180.0),
+    ("1.5 min", 90.0), ("90s", 90.0), ("45 seconds", 45.0), ("2:30", 150.0),
+    ("1:00:00", 3600.0), (None, None), ("", None),
 ])
-def test_parse_duration_spec(g, value, expected):
-    assert g._parse_duration_spec(value) == expected
+def test_parse_duration_spec(value, expected):
+    assert parse_duration_spec(value) == expected
 
 
-def test_parse_duration_spec_invalid(g):
+def test_parse_duration_spec_invalid():
     with pytest.raises(SystemExit):
-        g._parse_duration_spec("soon-ish")
+        parse_duration_spec("soon-ish")
 
 
-def _sb_md_with_durations(durations, max_key=None, max_val=None):
-    scenes = [{"basename": f"{i:02d}_s", "classname": f"S{i}",
-               "duration": d, "narration": {"id": "x", "en": "y"}}
-              for i, d in enumerate(durations, start=1)]
-    return scenes
+def _durations_md(durations):
+    return [{"basename": f"{i:02d}_s", "classname": f"S{i}", "duration": d,
+             "narration": {"id": "x", "en": "y"}} for i, d in enumerate(durations, start=1)]
 
 
-def test_max_duration_under_budget_ok(g, tmp_path):
-    p = write_storyboard(
-        tmp_path / "sb.md",
-        scenes=_sb_md_with_durations([60, 60, 50]),  # 170s
-    )
-    # inject the cap into the front-matter (write_storyboard has no param for it)
-    text = p.read_text(encoding="utf-8").replace(
-        "fps: 30", "max_duration: 3 minutes\nfps: 30")
-    p.write_text(text, encoding="utf-8")
-    sb = g.parse_storyboard(p)
-    assert sb.max_duration == 180.0
+def test_max_duration_under_budget_ok(parser, tmp_path):
+    p = write_storyboard(tmp_path / "sb.md", scenes=_durations_md([60, 60, 50]))
+    p.write_text(p.read_text().replace("fps: 30", "max_duration: 3 minutes\nfps: 30"))
+    assert parser.parse(p).max_duration == 180.0
 
 
-def test_max_duration_over_budget_raises(g, tmp_path):
-    p = write_storyboard(
-        tmp_path / "sb.md",
-        scenes=_sb_md_with_durations([90, 80, 40]),  # 210s > 180
-    )
-    text = p.read_text(encoding="utf-8").replace(
-        "fps: 30", "max_duration: 3 minutes\nfps: 30")
-    p.write_text(text, encoding="utf-8")
+def test_max_duration_over_budget_raises(parser, tmp_path):
+    p = write_storyboard(tmp_path / "sb.md", scenes=_durations_md([90, 80, 40]))  # 210
+    p.write_text(p.read_text().replace("fps: 30", "max_duration: 3 minutes\nfps: 30"))
     with pytest.raises(SystemExit) as ei:
-        g.parse_storyboard(p)
+        parser.parse(p)
     assert "max_duration" in str(ei.value) and "210" in str(ei.value)
 
 
-def test_max_scene_duration_alias_is_total_cap(g, tmp_path):
-    # The alias key behaves as the whole-video cap too.
-    p = write_storyboard(
-        tmp_path / "sb.md",
-        scenes=_sb_md_with_durations([100, 100]),  # 200s > 180
-    )
-    text = p.read_text(encoding="utf-8").replace(
-        "fps: 30", "max_scene_duration: 3 minutes\nfps: 30")
-    p.write_text(text, encoding="utf-8")
+def test_max_scene_duration_alias_is_total_cap(parser, tmp_path):
+    p = write_storyboard(tmp_path / "sb.md", scenes=_durations_md([100, 100]))  # 200
+    p.write_text(p.read_text().replace("fps: 30", "max_scene_duration: 3 minutes\nfps: 30"))
     with pytest.raises(SystemExit):
-        g.parse_storyboard(p)
+        parser.parse(p)
 
 
-# --- voice resolution ------------------------------------------------------
+# --- subtitles -------------------------------------------------------------
 
 
-def _sb(g, **kw):
-    """A tiny in-memory Storyboard for resolver tests."""
-    defaults = dict(
-        title="t", languages=["id", "en"], orientations=["landscape"],
-        voices={}, tts_provider="edge", gemini_model=g.DEFAULT_GEMINI_MODEL,
-        gemini_api_key=None, ai_cli="claude", fps=30,
-        resolution_landscape=(1920, 1080), scenes_landscape_dir=None,
-        scenes_portrait_dir=None, scenes=[], project_brief="",
-    )
-    defaults.update(kw)
-    return g.Storyboard(**defaults)
+def test_format_timestamp():
+    assert subtitles.format_timestamp(0) == "00:00:00,000"
+    assert subtitles.format_timestamp(1.25) == "00:00:01,250"
+    assert subtitles.format_timestamp(3661.5) == "01:01:01,500"
+    assert subtitles.format_timestamp(-5) == "00:00:00,000"
+    assert subtitles.format_timestamp(0.9999) == "00:00:01,000"  # ms rounding carry
 
 
-def test_resolve_voice_edge_from_map(g):
-    sb = _sb(g, voices={"id": "id-ID-ArdiNeural", "en": "en-US-GuyNeural"})
-    assert g._resolve_voice(sb, "en") == "en-US-GuyNeural"
+def test_split_sentences():
+    assert subtitles.split_sentences("Halo dunia. Foo bar! Baz?") == ["Halo dunia.", "Foo bar!", "Baz?"]
+    assert subtitles.split_sentences("   ") == []
 
 
-def test_resolve_voice_edge_fallback_ardi(g):
-    sb = _sb(g, voices={}, tts_provider="edge")
-    assert g._resolve_voice(sb, "id") == g.DEFAULT_EDGE_VOICE == "id-ID-ArdiNeural"
-
-
-def test_resolve_voice_gemini_fallback_iapetus(g):
-    sb = _sb(g, voices={}, tts_provider="gemini")
-    assert g._resolve_voice(sb, "id") == g.DEFAULT_GEMINI_VOICE == "Iapetus"
-
-
-def test_resolve_voice_gemini_from_map(g):
-    sb = _sb(g, voices={"id": "Charon"}, tts_provider="gemini")
-    assert g._resolve_voice(sb, "id") == "Charon"
-
-
-# --- Gemini key resolution -------------------------------------------------
-
-
-def test_resolve_gemini_key_front_matter_wins(g, monkeypatch):
-    monkeypatch.setenv("GEMINI_API_KEY", "from-env")
-    sb = _sb(g, gemini_api_key="from-front-matter")
-    assert g._resolve_gemini_key(sb) == "from-front-matter"
-
-
-def test_resolve_gemini_key_env(g, monkeypatch):
-    monkeypatch.setenv("GEMINI_API_KEY", "from-env")
-    sb = _sb(g, gemini_api_key=None)
-    assert g._resolve_gemini_key(sb) == "from-env"
-
-
-def test_resolve_gemini_key_from_dotenv(g, monkeypatch, tmp_path):
-    monkeypatch.setattr(g, "REPO_ROOT", tmp_path)
-    (tmp_path / ".env").write_text(
-        '# comment\nGEMINI_API_KEY="dotenv-secret"\nOTHER=1\n', encoding="utf-8"
-    )
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    sb = _sb(g, gemini_api_key=None)
-    assert g._resolve_gemini_key(sb) == "dotenv-secret"
-
-
-def test_resolve_gemini_key_absent(g, monkeypatch, tmp_path):
-    monkeypatch.setattr(g, "REPO_ROOT", tmp_path)
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    sb = _sb(g, gemini_api_key=None)
-    assert g._resolve_gemini_key(sb) is None
-
-
-# --- timestamps & estimated SRT --------------------------------------------
-
-
-def test_fmt_ts_basic(g):
-    assert g._fmt_ts(0) == "00:00:00,000"
-    assert g._fmt_ts(1.25) == "00:00:01,250"
-    assert g._fmt_ts(3661.5) == "01:01:01,500"
-
-
-def test_fmt_ts_clamps_negative(g):
-    assert g._fmt_ts(-5) == "00:00:00,000"
-
-
-def test_fmt_ts_ms_rounding_carry(g):
-    assert g._fmt_ts(0.9999) == "00:00:01,000"
-
-
-def test_split_sentences(g):
-    assert g._split_sentences("Halo dunia. Foo bar! Baz?") == [
-        "Halo dunia.", "Foo bar!", "Baz?",
-    ]
-
-
-def test_split_sentences_empty(g):
-    assert g._split_sentences("   ") == []
-
-
-def test_write_estimated_srt(g, tmp_path):
+def test_write_estimated_srt(tmp_path):
     import srt as _srt
-
     out = tmp_path / "clip.srt"
     s1, s2 = "Kalimat satu.", "Kalimat dua lebih panjang."
-    g._write_estimated_srt(f"{s1} {s2}", 10.0, out)
+    subtitles.write_estimated_srt(f"{s1} {s2}", 10.0, out)
     cues = list(_srt.parse(out.read_text(encoding="utf-8")))
     assert len(cues) == 2
     assert cues[0].start.total_seconds() == pytest.approx(0.0)
     assert cues[-1].end.total_seconds() == pytest.approx(10.0)
-    # boundary is proportional to sentence length
     expected = 10.0 * len(s1) / (len(s1) + len(s2))
     assert cues[0].end.total_seconds() == pytest.approx(expected, abs=0.05)
     assert cues[0].content == s1
 
 
-def test_write_estimated_srt_empty(g, tmp_path):
+def test_write_estimated_srt_empty(tmp_path):
     out = tmp_path / "clip.srt"
-    g._write_estimated_srt("   ", 5.0, out)
+    subtitles.write_estimated_srt("   ", 5.0, out)
     assert out.read_text() == ""
 
 
-# --- Pango ampersand escape ------------------------------------------------
+# --- TTS: voice resolution + key resolution --------------------------------
 
 
-def test_escape_bare_ampersand_in_literal(g):
-    assert g._escape_unsafe_ampersands('x = "Tom & Jerry"') == 'x = "Tom &amp; Jerry"'
+def test_voice_for_edge_from_map():
+    sb = make_storyboard(voices={"id": "id-ID-ArdiNeural", "en": "en-US-GuyNeural"})
+    assert EdgeTtsEngine().voice_for(sb, "en") == "en-US-GuyNeural"
 
 
-def test_escape_leaves_known_entities(g):
-    src = '"a &amp; b &lt; c &#39;d"'
-    assert g._escape_unsafe_ampersands(src) == src
+def test_voice_for_edge_default():
+    assert EdgeTtsEngine().voice_for(make_storyboard(voices={}), "id") == config.DEFAULT_EDGE_VOICE
 
 
-def test_escape_multiple_in_one_literal(g):
-    assert g._escape_unsafe_ampersands("'A & B & C'") == "'A &amp; B &amp; C'"
+def test_voice_for_gemini_default():
+    assert GeminiTtsEngine().voice_for(make_storyboard(voices={}), "id") == config.DEFAULT_GEMINI_VOICE
 
 
-def test_escape_ignores_ampersand_outside_strings(g):
-    # A bitwise `&` in code (not inside a string literal) must be left alone.
-    assert g._escape_unsafe_ampersands("flags = A & B") == "flags = A & B"
+def test_voice_for_gemini_from_map():
+    assert GeminiTtsEngine().voice_for(make_storyboard(voices={"id": "Charon"}), "id") == "Charon"
 
 
-def test_escape_idempotent(g):
-    once = g._escape_unsafe_ampersands('t("R&D")')
-    assert once == 't("R&amp;D")'
-    assert g._escape_unsafe_ampersands(once) == once
+def test_resolve_gemini_key_front_matter_wins(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "from-env")
+    assert resolve_gemini_key(make_storyboard(gemini_api_key="from-front-matter")) == "from-front-matter"
 
 
-# --- code fence stripping --------------------------------------------------
+def test_resolve_gemini_key_env(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "from-env")
+    assert resolve_gemini_key(make_storyboard(gemini_api_key=None)) == "from-env"
 
 
-def test_strip_code_fences_plain(g):
-    assert g._strip_code_fences("from manim import *\n") == "from manim import *"
+def test_resolve_gemini_key_from_dotenv(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "REPO_ROOT", tmp_path)
+    (tmp_path / ".env").write_text('# c\nGEMINI_API_KEY="dotenv-secret"\nOTHER=1\n', encoding="utf-8")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    assert resolve_gemini_key(make_storyboard(gemini_api_key=None)) == "dotenv-secret"
 
 
-def test_strip_code_fences_fenced(g):
-    text = "```python\nfrom manim import *\nx = 1\n```"
-    assert g._strip_code_fences(text) == "from manim import *\nx = 1"
+def test_resolve_gemini_key_absent(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "REPO_ROOT", tmp_path)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    assert resolve_gemini_key(make_storyboard(gemini_api_key=None)) is None
 
 
-def test_strip_code_fences_drops_prose_preamble(g):
-    # The failure mode that aborted a real build: a prose line before the code
-    # (the "30s" makes ast choke on an invalid decimal literal).
-    text = "Here is scene 6, the conclusion, about 30s long:\nfrom manim import *\nx = 1\n"
-    assert g._strip_code_fences(text) == "from manim import *\nx = 1"
+# --- TTS: factory routing --------------------------------------------------
 
 
-def test_strip_code_fences_prose_then_fence(g):
-    text = "Sure! Here's the file:\n```python\nfrom manim import *\ny = 2\n```\nHope that helps."
-    assert g._strip_code_fences(text) == "from manim import *\ny = 2"
+def test_create_tts_engine_edge():
+    assert isinstance(create_tts_engine(make_storyboard(tts_provider="edge")), EdgeTtsEngine)
 
 
-def test_strip_code_fences_keeps_clean_source(g):
-    src = "from manim import *\nfrom _common import title_text\n\nclass S(Scene):\n    pass"
-    assert g._strip_code_fences(src) == src
+@pytest.mark.parametrize("provider", ["gemini", "google", "google_chirp", "chirp"])
+def test_create_tts_engine_gemini_and_aliases(provider):
+    assert isinstance(create_tts_engine(make_storyboard(tts_provider=provider)), GeminiTtsEngine)
 
 
-def test_extract_layout_issues_from_layout_error(g):
-    out = (
-        "[layout] 1 issue(s) in RefactorSingleton:\n"
-        "  - OVERFLOW: 'Same object!' extends past the frame\n"
-        "LayoutError: [layout] 1 issue(s) in RefactorSingleton: "
-        "OVERFLOW: 'Same object!' extends past the frame\n"
-    )
-    issues = g._extract_layout_issues(out)
-    assert issues.startswith("[layout] 1 issue(s) in RefactorSingleton:")
-    assert "OVERFLOW" in issues
-
-
-def test_extract_layout_issues_falls_back_to_bullets(g):
-    # warn-style output: bullets under a [layout] header, no LayoutError line.
-    out = (
-        "[layout] 2 issue(s) in S:\n"
-        "  - OVERFLOW: 'A' extends past the frame\n"
-        "  - OVERLAP: 'A' and 'B' overlap (80% of the smaller box)\n"
-    )
-    issues = g._extract_layout_issues(out)
-    assert issues == ("OVERFLOW: 'A' extends past the frame; "
-                      "OVERLAP: 'A' and 'B' overlap (80% of the smaller box)")
-
-
-def test_extract_layout_issues_ignores_non_layout_failures(g):
-    # A plain Manim/Python traceback is not a layout violation -> no repair.
-    out = "Traceback (most recent call last):\n  File ...\nValueError: boom\n"
-    assert g._extract_layout_issues(out) == ""
-
-
-# --- AST validation --------------------------------------------------------
-
-
-def test_validate_scene_source_ok(g, tmp_path):
-    g._validate_scene_source(tmp_path / "s.py", "x = 1\ndef f():\n    return x\n")
-
-
-def test_validate_scene_source_syntax_error(g, tmp_path):
-    with pytest.raises(SystemExit) as ei:
-        g._validate_scene_source(tmp_path / "s.py", "def f(:\n  pass\n")
-    assert "not valid Python" in str(ei.value)
-
-
-# --- render-error extraction (for AI auto-repair) --------------------------
-
-
-def test_extract_render_error_nameerror_with_location(g):
-    out = (
-        "│ /x/scenes_landscape/scene_04_refactor_singleton.py:76 in construct │\n"
-        "│ ❱  76 │   color=OK, fill=CARD_BG_OR())                             │\n"
-        "NameError: name 'CARD_BG_OR' is not defined\n"
-    )
-    msg = g._extract_render_error(out)
-    assert msg.startswith("NameError: name 'CARD_BG_OR' is not defined")
-    assert "scene_04_refactor_singleton.py:76 in construct" in msg
-
-
-def test_extract_render_error_none_on_clean_output(g):
-    assert g._extract_render_error("INFO Rendered Scene\nPlayed 5 animations\n") == ""
-
-
-def test_extract_render_error_prefers_last(g):
-    out = "ValueError: first\n...\nTypeError: second one\n"
-    assert g._extract_render_error(out).startswith("TypeError: second one")
-
-
-def test_extract_render_error_ignores_traceback_header(g):
-    # the literal word "Traceback (most recent call last):" must not be picked
-    out = "Traceback (most recent call last):\nKeyError: 'missing'\n"
-    assert g._extract_render_error(out).startswith("KeyError: 'missing'")
-
-
-# --- prompts ---------------------------------------------------------------
-
-
-def test_build_narration_prompt(g):
-    sb = _sb(g, title="Pythagorean", project_brief="A brief about triangles.")
-    sc = g.Scene(basename="01_x", classname="X", file="s.py", fallback_duration=20,
-                 description="Title card.", narration={"en": "Hello there."})
-    prompt = g.build_narration_prompt(sb, sc, "id")
-    assert "Pythagorean" in prompt
-    assert "Title card." in prompt
-    assert "Indonesian" in prompt
-    # the existing other-language narration is offered for meaning
-    assert "Hello there." in prompt
-    # word target = max(20, duration*1.9), enforced as a hard limit
-    assert str(int(20 * 1.9)) in prompt
-    assert "HARD LIMIT" in prompt
-
-
-def test_build_scene_prompt_includes_sources_and_narration(g):
-    sb = _sb(g, title="T")
-    sc = g.Scene(basename="01_x", classname="MyScene", file="s.py",
-                 fallback_duration=10, description="desc",
-                 narration={"id": "teks id", "en": "english text"})
-    prompt = g._build_scene_prompt(sb, sc, "portrait", "SKELETON_MARK", "COMMON_MARK")
-    assert "COMMON_MARK" in prompt and "SKELETON_MARK" in prompt
-    assert "teks id" in prompt and "english text" in prompt
-    assert "class MyScene(Scene)" in prompt
-    # portrait gets the shorts-safe constraint
-    assert "SHORTS_SAFE_BOTTOM" in prompt
-
-
-# --- TTS dispatch ----------------------------------------------------------
-
-
-def test_generate_audio_unknown_provider(g, tmp_path):
-    sb = _sb(g, tts_provider="festival")
+def test_create_tts_engine_unknown_raises():
     with pytest.raises(SystemExit):
-        g.generate_audio(sb, tmp_path, force=False)
+        create_tts_engine(make_storyboard(tts_provider="festival"))
 
 
-# --- edge-tts transient-failure retry --------------------------------------
+# --- EdgeTtsEngine retry ---------------------------------------------------
 
 
 class _Proc:
     def __init__(self, returncode, stderr=""):
-        self.returncode = returncode
-        self.stderr = stderr
-        self.stdout = ""
+        self.returncode, self.stderr, self.stdout = returncode, stderr, ""
 
 
-def test_edge_tts_retries_then_succeeds(g, tmp_path, monkeypatch):
+def test_edge_retries_then_succeeds(tmp_path, monkeypatch):
     calls = {"n": 0}
 
     def fake_run(cmd, **kw):
@@ -561,105 +352,62 @@ def test_edge_tts_retries_then_succeeds(g, tmp_path, monkeypatch):
             return _Proc(1, "socket.gaierror: Temporary failure in name resolution")
         return _Proc(0)
 
-    monkeypatch.setattr(g.subprocess, "run", fake_run)
-    monkeypatch.setattr(g.time, "sleep", lambda *_: None)  # no real backoff
-    g._edge_tts_one("v", "hi", tmp_path / "a.mp3", tmp_path / "a.srt", retries=3, wait=0.0)
-    assert calls["n"] == 3  # failed twice (transient), succeeded on the third
+    monkeypatch.setattr(tts_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(tts_mod.time, "sleep", lambda *_: None)
+    EdgeTtsEngine().synthesize_clip("v", "hi", tmp_path / "a.mp3", tmp_path / "a.srt",
+                                    retries=3, wait=0.0)
+    assert calls["n"] == 3
 
 
-def test_edge_tts_transient_exhausted_raises_with_hint(g, tmp_path, monkeypatch):
-    monkeypatch.setattr(g.subprocess, "run",
+def test_edge_transient_exhausted_raises_with_hint(tmp_path, monkeypatch):
+    monkeypatch.setattr(tts_mod.subprocess, "run",
                         lambda cmd, **kw: _Proc(1, "Cannot connect to host speech.platform.bing.com"))
-    monkeypatch.setattr(g.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(tts_mod.time, "sleep", lambda *_: None)
     with pytest.raises(SystemExit) as ei:
-        g._edge_tts_one("v", "hi", tmp_path / "a.mp3", tmp_path / "a.srt", retries=2, wait=0.0)
+        EdgeTtsEngine().synthesize_clip("v", "hi", tmp_path / "a.mp3", tmp_path / "a.srt",
+                                        retries=2, wait=0.0)
     assert "network problem" in str(ei.value)
 
 
-def test_valid_audio_rejects_missing_and_empty(g, tmp_path):
-    assert g._valid_audio(tmp_path / "nope.mp3") is False
-    empty = tmp_path / "empty.mp3"
-    empty.write_bytes(b"")           # the 0-byte file an interrupted TTS leaves
-    assert g._valid_audio(empty) is False
-
-
-def test_edge_tts_nontransient_fails_fast(g, tmp_path, monkeypatch):
+def test_edge_nontransient_fails_fast(tmp_path, monkeypatch):
     calls = {"n": 0}
 
     def fake_run(cmd, **kw):
         calls["n"] += 1
         return _Proc(1, "No audio was received. Verify the voice name 'bogus'.")
 
-    monkeypatch.setattr(g.subprocess, "run", fake_run)
-    monkeypatch.setattr(g.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(tts_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(tts_mod.time, "sleep", lambda *_: None)
     with pytest.raises(SystemExit):
-        g._edge_tts_one("bogus", "hi", tmp_path / "a.mp3", tmp_path / "a.srt", retries=3, wait=0.0)
-    assert calls["n"] == 1  # a non-network error is not retried
+        EdgeTtsEngine().synthesize_clip("bogus", "hi", tmp_path / "a.mp3", tmp_path / "a.srt",
+                                        retries=3, wait=0.0)
+    assert calls["n"] == 1
 
 
-def test_generate_audio_routes_edge(g, tmp_path, monkeypatch):
-    seen = {}
-    monkeypatch.setattr(g, "_generate_audio_edge", lambda sb, o, f: seen.setdefault("p", "edge"))
-    monkeypatch.setattr(g, "_generate_audio_gemini", lambda sb, o, f: seen.setdefault("p", "gemini"))
-    g.generate_audio(_sb(g, tts_provider="edge"), tmp_path, False)
-    assert seen["p"] == "edge"
+# --- media validation ------------------------------------------------------
 
 
-@pytest.mark.parametrize("provider", ["gemini", "google", "google_chirp", "chirp"])
-def test_generate_audio_routes_gemini_and_aliases(g, tmp_path, monkeypatch, provider):
-    seen = {}
-    monkeypatch.setattr(g, "_generate_audio_edge", lambda sb, o, f: seen.setdefault("p", "edge"))
-    monkeypatch.setattr(g, "_generate_audio_gemini", lambda sb, o, f: seen.setdefault("p", "gemini"))
-    g.generate_audio(_sb(g, tts_provider=provider), tmp_path, False)
-    assert seen["p"] == "gemini"
+def test_valid_audio_rejects_missing_and_empty(tmp_path):
+    assert media.valid_audio(tmp_path / "nope.mp3") is False
+    empty = tmp_path / "empty.mp3"
+    empty.write_bytes(b"")
+    assert media.valid_audio(empty) is False
 
 
-# --- _peek_ai_cli ----------------------------------------------------------
+def test_is_up_to_date(tmp_path):
+    import os
+    dest, src = tmp_path / "out.mp4", tmp_path / "in.py"
+    src.write_text("x")
+    assert media.is_up_to_date(dest, src) is False           # dest missing
+    dest.write_text("v")
+    os.utime(src, (1000, 1000)); os.utime(dest, (2000, 2000))
+    assert media.is_up_to_date(dest, src) is True            # dest newer
+    os.utime(src, (3000, 3000))
+    assert media.is_up_to_date(dest, src) is False           # src newer
+    assert media.is_up_to_date(dest, tmp_path / "absent") is True  # missing src ignored
 
 
-def test_peek_ai_cli_reads_front_matter(g, tmp_path):
-    p = write_storyboard(tmp_path / "sb.md", ai_cli="codex")
-    assert g._peek_ai_cli(p) == "codex"
-
-
-def test_peek_ai_cli_missing_returns_none(g, tmp_path):
-    p = tmp_path / "x.md"
-    p.write_text("no front matter here", encoding="utf-8")
-    assert g._peek_ai_cli(p) is None
-
-
-# --- cmd_build CLI overrides -----------------------------------------------
-
-
-def test_cmd_build_tts_and_voice_override(g, tmp_path, monkeypatch):
-    """--tts / --voice override the storyboard and --voice applies to all langs."""
-    p = write_storyboard(
-        tmp_path / "sb.md",
-        tts_provider="edge",
-        voices={"id": "id-ID-ArdiNeural", "en": "en-US-GuyNeural"},
-        scenes=[{"basename": "01_x", "classname": "X",
-                 "narration": {"id": "halo", "en": "hi"}}],
-    )
-    captured = {}
-
-    def fake_generate_audio(sb, output, force):
-        captured["provider"] = sb.tts_provider
-        captured["voices"] = dict(sb.voices)
-
-    monkeypatch.setattr(g, "generate_audio", fake_generate_audio)
-    monkeypatch.setattr(g, "ensure_narration", lambda sb, sc, lang, output=None: "x")
-
-    args = Namespace(
-        storyboard=str(p), output=str(tmp_path / "out"), stage="audio",
-        only=None, force=False, ai_cli="claude", tts="gemini", voice="Charon",
-        gemini_api_key="k", skip_dep_check=True, no_ai_cli_check=True,
-    )
-    g.cmd_build(args)
-    assert captured["provider"] == "gemini"
-    assert set(captured["voices"].values()) == {"Charon"}
-
-
-# --- Gemini HTTP response parsing (mocked) ---------------------------------
+# --- Gemini HTTP parsing + quota classification ----------------------------
 
 
 class _FakeResp(io.BytesIO):
@@ -670,247 +418,493 @@ class _FakeResp(io.BytesIO):
         return False
 
 
-def test_gemini_synth_parses_audio(g, monkeypatch):
+def test_request_gemini_audio_parses(monkeypatch):
     import base64
-
     pcm = b"\x01\x02\x03\x04"
     payload = {"candidates": [{"content": {"parts": [
         {"inlineData": {"mimeType": "audio/L16;codec=pcm;rate=24000",
-                        "data": base64.b64encode(pcm).decode()}}
-    ]}}]}
-    monkeypatch.setattr(g.urllib.request, "urlopen",
+                        "data": base64.b64encode(pcm).decode()}}]}}]}
+    monkeypatch.setattr(tts_mod.urllib.request, "urlopen",
                         lambda req, timeout=None: _FakeResp(json.dumps(payload).encode()))
-    out_pcm, rate = g._gemini_synth("hi", "key", "model", "Iapetus", 30.0)
-    assert out_pcm == pcm
-    assert rate == 24000
+    out_pcm, rate = request_gemini_audio("hi", "key", "model", "Iapetus", 30.0)
+    assert out_pcm == pcm and rate == 24000
 
 
-def test_gemini_synth_http_error_becomes_runtimeerror(g, monkeypatch):
+def test_request_gemini_audio_http_error_becomes_runtimeerror(monkeypatch):
     def boom(req, timeout=None):
-        raise g.urllib.error.HTTPError("url", 429, "Too Many Requests", {},
-                                       io.BytesIO(b'{"error":"quota"}'))
+        raise tts_mod.urllib.error.HTTPError("u", 429, "Too Many", {},
+                                             io.BytesIO(b'{"error":"quota"}'))
 
-    monkeypatch.setattr(g.urllib.request, "urlopen", boom)
+    monkeypatch.setattr(tts_mod.urllib.request, "urlopen", boom)
     with pytest.raises(RuntimeError) as ei:
-        g._gemini_synth("hi", "key", "model", "Iapetus", 30.0)
+        request_gemini_audio("hi", "key", "model", "Iapetus", 30.0)
     assert "429" in str(ei.value)
 
 
-def test_gemini_synth_no_audio_raises(g, monkeypatch):
-    monkeypatch.setattr(g.urllib.request, "urlopen",
+def test_request_gemini_audio_no_audio_raises(monkeypatch):
+    monkeypatch.setattr(tts_mod.urllib.request, "urlopen",
                         lambda req, timeout=None: _FakeResp(json.dumps({"candidates": []}).encode()))
     with pytest.raises(RuntimeError):
-        g._gemini_synth("hi", "key", "model", "Iapetus", 30.0)
+        request_gemini_audio("hi", "key", "model", "Iapetus", 30.0)
 
 
-# --- Gemini 429 quota handling ---------------------------------------------
-
-_DAILY_429 = json.dumps({"error": {
-    "code": 429,
-    "message": ("You exceeded your current quota. Quota exceeded for metric: "
-                "generativelanguage.googleapis.com/generate_requests_per_model_per_day, "
-                "limit: 100"),
-}})
+_DAILY_429 = json.dumps({"error": {"code": 429, "message": (
+    "You exceeded your current quota. Quota exceeded for metric: "
+    "generativelanguage.googleapis.com/generate_requests_per_model_per_day, limit: 100")}})
 
 
-def test_is_daily_quota_detects_per_day(g):
-    assert g._is_daily_quota(_DAILY_429) is True
-    assert g._is_daily_quota('{"error":{"message":"per_model_per_day"}}') is True
-    assert g._is_daily_quota('{"error":{"message":"requests per minute"}}') is False
+def test_is_daily_quota_detects_per_day():
+    assert is_daily_quota(_DAILY_429) is True
+    assert is_daily_quota('{"error":{"message":"per_model_per_day"}}') is True
+    assert is_daily_quota('{"error":{"message":"requests per minute"}}') is False
 
 
-def test_gemini_error_message_extracts_message(g):
-    assert "exceeded your current quota" in g._gemini_error_message(_DAILY_429)
-    assert g._gemini_error_message("not json at all <html>") == "not json at all <html>"
+def test_gemini_error_message_extracts():
+    assert "exceeded your current quota" in gemini_error_message(_DAILY_429)
+    assert gemini_error_message("not json at all <html>") == "not json at all <html>"
 
 
-def test_gemini_synth_daily_quota_raises_quota_error(g, monkeypatch):
+def test_request_gemini_audio_daily_quota_raises_quota_error(monkeypatch):
     def boom(req, timeout=None):
-        raise g.urllib.error.HTTPError("url", 429, "Too Many Requests", {},
-                                       io.BytesIO(_DAILY_429.encode()))
+        raise tts_mod.urllib.error.HTTPError("u", 429, "Too Many", {}, io.BytesIO(_DAILY_429.encode()))
 
-    monkeypatch.setattr(g.urllib.request, "urlopen", boom)
-    with pytest.raises(g.GeminiQuotaError):
-        g._gemini_synth("hi", "key", "model", "Iapetus", 30.0)
+    monkeypatch.setattr(tts_mod.urllib.request, "urlopen", boom)
+    with pytest.raises(GeminiQuotaError):
+        request_gemini_audio("hi", "key", "model", "Iapetus", 30.0)
 
 
-def test_gemini_synth_other_429_is_plain_runtimeerror(g, monkeypatch):
+def test_request_gemini_audio_other_429_is_plain_runtimeerror(monkeypatch):
     body = json.dumps({"error": {"code": 429, "message": "Rate limit: requests per minute"}})
 
     def boom(req, timeout=None):
-        raise g.urllib.error.HTTPError("url", 429, "Too Many Requests", {},
-                                       io.BytesIO(body.encode()))
+        raise tts_mod.urllib.error.HTTPError("u", 429, "Too Many", {}, io.BytesIO(body.encode()))
 
-    monkeypatch.setattr(g.urllib.request, "urlopen", boom)
+    monkeypatch.setattr(tts_mod.urllib.request, "urlopen", boom)
     with pytest.raises(RuntimeError) as ei:
-        g._gemini_synth("hi", "key", "model", "Iapetus", 30.0)
-    assert not isinstance(ei.value, g.GeminiQuotaError)
-    assert "429" in str(ei.value)
+        request_gemini_audio("hi", "key", "model", "Iapetus", 30.0)
+    assert not isinstance(ei.value, GeminiQuotaError) and "429" in str(ei.value)
 
 
-def test_generate_audio_gemini_quota_fast_fails_without_retry(g, tmp_path, monkeypatch):
-    sb = _sb(g, languages=["id"], tts_provider="gemini", gemini_api_key="key",
-             scenes=[g.Scene(basename="01_x", classname="X", file="s.py",
-                             fallback_duration=10, description="d",
-                             narration={"id": "Halo."})])
+def test_gemini_engine_quota_fast_fails_without_retry(tmp_path, monkeypatch):
     calls = {"n": 0}
 
     def quota(*a, **k):
         calls["n"] += 1
-        raise g.GeminiQuotaError("daily quota exhausted")
+        raise GeminiQuotaError("daily quota exhausted")
 
-    monkeypatch.setattr(g, "_gemini_tts_one", quota)
-    # no sleeping should happen (no retries on a daily quota)
-    monkeypatch.setattr(g.time, "sleep", lambda *_: (_ for _ in ()).throw(AssertionError("slept")))
+    monkeypatch.setattr(tts_mod, "write_gemini_clip", quota)
+    monkeypatch.setattr(tts_mod.time, "sleep",
+                        lambda *_: (_ for _ in ()).throw(AssertionError("slept")))
+    engine = GeminiTtsEngine(retries=2, wait=0.0)
     with pytest.raises(SystemExit) as ei:
-        g._generate_audio_gemini(sb, tmp_path, force=False, wait=0.0)
-    assert calls["n"] == 1  # tried once, then bailed
+        engine.synthesize_one("Halo.", "Iapetus", tmp_path / "a.mp3", tmp_path / "a.srt")
+    assert calls["n"] == 1
     assert "--tts edge" in str(ei.value)
 
 
-# --- YouTube metadata helpers ----------------------------------------------
+# --- duration fitter -------------------------------------------------------
 
 
-def test_strip_emoji_hashtags_title(g):
-    out = g._strip_emoji_hashtags("Belajar Pythagoras 🚀 #keren #math sekarang")
-    assert "🚀" not in out
-    assert "#keren" not in out and "#math" not in out
+def test_estimate_seconds():
+    assert estimate_seconds("one two three four") == pytest.approx(4 / config.ESTIMATE_WORDS_PER_SECOND)
+    assert estimate_seconds("") == 0.0
+
+
+def test_fit_before_tts_compresses_when_over(tmp_path, monkeypatch):
+    long_id = " ".join(["kata"] * 300)
+    sb = make_storyboard(
+        languages=["id"], max_duration=60.0,
+        scenes=[Scene("01_a", "A", "s.py", 30, "d", {"id": long_id}),
+                Scene("02_b", "B", "s.py", 30, "d", {"id": long_id})])
+    (tmp_path / "scripts" / "id").mkdir(parents=True)
+    fitter = DurationFitter(FakeAiClient(), EdgeTtsEngine())
+    # deterministic compress = keep the first N words (no AI)
+    monkeypatch.setattr(fitter, "_compress_narration",
+                        lambda sb_, lang, cur, n: " ".join(cur.split()[:n]))
+    fitter.fit_before_tts(sb, tmp_path)
+    total = sum(estimate_seconds(s.narration["id"]) for s in sb.scenes)
+    assert total <= 60.0
+    assert len((tmp_path / "scripts" / "id" / "01_a.txt").read_text().split()) < 300
+
+
+def test_fit_before_tts_noop_without_cap(tmp_path, monkeypatch):
+    called = {"n": 0}
+    sb = make_storyboard(languages=["id"], max_duration=None,
+                         scenes=[Scene("01_a", "A", "s.py", 30, "d", {"id": " ".join(["w"] * 999)})])
+    fitter = DurationFitter(FakeAiClient(), EdgeTtsEngine())
+    monkeypatch.setattr(fitter, "_compress_narration",
+                        lambda *a, **k: called.__setitem__("n", called["n"] + 1) or "x")
+    fitter.fit_before_tts(sb, tmp_path)
+    assert called["n"] == 0
+
+
+# --- prompts ---------------------------------------------------------------
+
+
+def test_narration_prompt():
+    sb = make_storyboard(title="Pythagorean", project_brief="A brief about triangles.")
+    sc = Scene("01_x", "X", "s.py", 20, "Title card.", {"en": "Hello there."})
+    prompt = NarrationWriter(FakeAiClient()).build_prompt(sb, sc, "id")
+    assert "Pythagorean" in prompt and "Title card." in prompt and "Indonesian" in prompt
+    assert "Hello there." in prompt                 # the other language offered for meaning
+    assert str(int(20 * 1.9)) in prompt and "HARD LIMIT" in prompt
+
+
+def test_scene_prompt_includes_sources_and_narration():
+    sb = make_storyboard(title="T")
+    sc = Scene("01_x", "MyScene", "s.py", 10, "desc", {"id": "teks id", "en": "english text"})
+    prompt = SceneSynthesizer(FakeAiClient()).build_prompt(sb, sc, "portrait", "SKELETON_MARK", "COMMON_MARK")
+    assert "COMMON_MARK" in prompt and "SKELETON_MARK" in prompt
+    assert "teks id" in prompt and "english text" in prompt
+    assert "class MyScene(Scene)" in prompt
+    assert "SHORTS_SAFE_BOTTOM" in prompt            # portrait constraint
+
+
+# --- renderer output parsing -----------------------------------------------
+
+
+def test_extract_layout_issues_from_layout_error():
+    out = ("[layout] 1 issue(s) in RefactorSingleton:\n"
+           "  - OVERFLOW: 'Same object!' extends past the frame\n"
+           "LayoutError: [layout] 1 issue(s) in RefactorSingleton: "
+           "OVERFLOW: 'Same object!' extends past the frame\n")
+    issues = renderer.extract_layout_issues(out)
+    assert issues.startswith("[layout] 1 issue(s) in RefactorSingleton:") and "OVERFLOW" in issues
+
+
+def test_extract_layout_issues_falls_back_to_bullets():
+    out = ("[layout] 2 issue(s) in S:\n"
+           "  - OVERFLOW: 'A' extends past the frame\n"
+           "  - OVERLAP: 'A' and 'B' overlap (80% of the smaller box)\n")
+    assert renderer.extract_layout_issues(out) == (
+        "OVERFLOW: 'A' extends past the frame; "
+        "OVERLAP: 'A' and 'B' overlap (80% of the smaller box)")
+
+
+def test_extract_layout_issues_ignores_non_layout():
+    out = "Traceback (most recent call last):\n  File ...\nValueError: boom\n"
+    assert renderer.extract_layout_issues(out) == ""
+
+
+def test_extract_render_error_nameerror_with_location():
+    out = ("│ /x/scenes_landscape/scene_04_refactor_singleton.py:76 in construct │\n"
+           "NameError: name 'CARD_BG_OR' is not defined\n")
+    msg = renderer.extract_render_error(out)
+    assert msg.startswith("NameError: name 'CARD_BG_OR' is not defined")
+    assert "scene_04_refactor_singleton.py:76 in construct" in msg
+
+
+def test_extract_render_error_none_on_clean():
+    assert renderer.extract_render_error("INFO Rendered Scene\nPlayed 5 animations\n") == ""
+
+
+def test_extract_render_error_prefers_last():
+    assert renderer.extract_render_error("ValueError: first\nTypeError: second one\n").startswith("TypeError: second one")
+
+
+def test_extract_render_error_ignores_traceback_header():
+    out = "Traceback (most recent call last):\nKeyError: 'missing'\n"
+    assert renderer.extract_render_error(out).startswith("KeyError: 'missing'")
+
+
+# --- YouTube helpers -------------------------------------------------------
+
+
+def test_strip_emoji_and_hashtags_title():
+    out = youtube.strip_emoji_and_hashtags("Belajar Pythagoras 🚀 #keren #math sekarang")
+    assert "🚀" not in out and "#keren" not in out and "#math" not in out
     assert "Belajar Pythagoras" in out and "sekarang" in out
 
 
-def test_strip_emoji_hashtags_keeps_csharp_and_punctuation(g):
-    out = g._strip_emoji_hashtags("Pemrograman C# — lanjutan… selesai")
+def test_strip_emoji_and_hashtags_keeps_csharp_and_punct():
+    out = youtube.strip_emoji_and_hashtags("Pemrograman C# — lanjutan… selesai")
     assert "C#" in out and "—" in out and "…" in out
 
 
-def test_strip_emoji_keeps_hashtags(g):
-    out = g._strip_emoji("Materi keren 🚀\n#Pythagoras #Mathematics")
-    assert "🚀" not in out
-    assert "#Pythagoras" in out and "#Mathematics" in out
+def test_strip_emoji_keeps_hashtags():
+    out = youtube.strip_emoji("Materi keren 🚀\n#Pythagoras #Mathematics")
+    assert "🚀" not in out and "#Pythagoras" in out and "#Mathematics" in out
 
 
-def test_cap_hashtags_limits_to_15(g):
+def test_cap_hashtags_limits_to_15():
     tags = " ".join(f"#tag{i}" for i in range(20))
-    out = g._cap_hashtags("Deskripsi. " + tags, max_tags=15)
-    kept = re.findall(r"#\w+", out)
-    assert len(kept) == 15
-    assert kept[0] == "#tag0" and kept[-1] == "#tag14"
+    kept = re.findall(r"#\w+", youtube.cap_hashtags("Deskripsi. " + tags, max_tags=15))
+    assert len(kept) == 15 and kept[0] == "#tag0" and kept[-1] == "#tag14"
 
 
-def test_cap_hashtags_keeps_all_when_under_limit(g):
+def test_cap_hashtags_keeps_all_when_under_limit():
     src = "Deskripsi. #a #b #c"
-    assert g._cap_hashtags(src) == src
+    assert youtube.cap_hashtags(src) == src
 
 
-def test_clamp_word_boundary(g):
-    out = g._clamp("satu dua tiga empat lima enam tujuh", 12)
+def test_clamp_word_boundary():
+    out = youtube.clamp("satu dua tiga empat lima enam tujuh", 12)
     assert len(out) <= 12 and not out.endswith(" ")
 
 
-def test_clamp_under_limit_unchanged(g):
-    assert g._clamp("short", 100) == "short"
+def test_clamp_under_limit_unchanged():
+    assert youtube.clamp("short", 100) == "short"
 
 
-def test_clamp_keywords_total_and_intact(g):
-    kw = ", ".join(f"tag{i:02d}" for i in range(200))
-    out = g._clamp_keywords(kw, 500)
-    assert len(out) <= 500
-    assert all(t.strip().startswith("tag") for t in out.split(","))
+def test_clamp_keywords_total_and_intact():
+    out = youtube.clamp_keywords(", ".join(f"tag{i:02d}" for i in range(200)), 500)
+    assert len(out) <= 500 and all(t.strip().startswith("tag") for t in out.split(","))
 
 
-def test_clamp_keywords_handles_newlines(g):
-    assert g._clamp_keywords("a,\nb , c\n", 500) == "a, b, c"
+def test_clamp_keywords_handles_newlines():
+    assert youtube.clamp_keywords("a,\nb , c\n", 500) == "a, b, c"
 
 
-def test_extract_json_variants(g):
-    assert g._extract_json('{"title": "x"}')["title"] == "x"
-    assert g._extract_json('```json\n{"a": 1}\n```') == {"a": 1}
-    assert g._extract_json('blah {"a": 2} blah') == {"a": 2}
+def test_extract_json_variants():
+    assert youtube.extract_json('{"title": "x"}')["title"] == "x"
+    assert youtube.extract_json('```json\n{"a": 1}\n```') == {"a": 1}
+    assert youtube.extract_json('blah {"a": 2} blah') == {"a": 2}
 
 
-def test_youtube_text_layout(g):
-    txt = g._youtube_text("T", "D", "k1, k2")
-    assert txt == "TITLE\nT\n\nDESCRIPTION\nD\n\nKEYWORDS\nk1, k2\n"
+def test_youtube_text_layout():
+    assert youtube.youtube_text("T", "D", "k1, k2") == "TITLE\nT\n\nDESCRIPTION\nD\n\nKEYWORDS\nk1, k2\n"
 
 
-def test_youtube_prompt_language_and_limits(g):
-    p_en = g._youtube_prompt("Hello world.", "en")
+def test_youtube_prompt_language_and_limits():
+    p_en = youtube.youtube_prompt("Hello world.", "en")
     assert "English" in p_en and "Hello world." in p_en
-    assert "100 characters" in p_en and "5000 characters" in p_en and "500" in p_en
-    assert "hashtags" in p_en
-    p_id = g._youtube_prompt("Halo dunia.", "id")
+    assert "100 characters" in p_en and "5000 characters" in p_en and "500" in p_en and "hashtags" in p_en
+    p_id = youtube.youtube_prompt("Halo dunia.", "id")
     assert "Indonesian" in p_id and "Halo dunia." in p_id
 
 
-# --- generate_youtube (per-language, run_ai_cli mocked) --------------------
+# --- YouTubeMetadataWriter (AI client faked) -------------------------------
 
 
-def test_generate_youtube_per_language(g, tmp_path, monkeypatch):
-    sb = _sb(g, languages=["id", "en"],
-             scenes=[g.Scene(basename="01_x", classname="X", file="s.py",
-                             fallback_duration=10, description="d",
-                             narration={"id": "Halo.", "en": "Hi."})])
-    # pre-write narration scripts the stage reads
+def test_youtube_writer_per_language(tmp_path):
+    sb = make_storyboard(languages=["id", "en"],
+                         scenes=[Scene("01_x", "X", "s.py", 10, "d", {"id": "Halo.", "en": "Hi."})])
     for lang, text in (("id", "Materi Pythagoras."), ("en", "Pythagoras material.")):
         d = tmp_path / "scripts" / lang
         d.mkdir(parents=True)
         (d / "01_x.txt").write_text(text, encoding="utf-8")
 
-    seen_langs = []
+    seen = []
 
-    def fake_run_ai_cli(cli, prompt):
-        # distinguish by the language's transcript embedded in the prompt
+    def reply(prompt):
         lang = "id" if "Materi Pythagoras." in prompt else "en"
-        seen_langs.append(lang)
+        seen.append(lang)
         return json.dumps({
             "title": ("Judul " if lang == "id" else "Title ") + "T" * 130 + " 🚀 #nope",
-            "description": "Hook. 🚀 " + ("x " * 50) + "\n" +
-                           " ".join(f"#tag{i}" for i in range(20)),
+            "description": "Hook. 🚀 " + ("x " * 50) + "\n" + " ".join(f"#tag{i}" for i in range(20)),
             "keywords": ", ".join(f"kw{i:03d}" for i in range(300)),
         })
 
-    monkeypatch.setattr(g, "run_ai_cli", fake_run_ai_cli)
-    g.generate_youtube(sb, tmp_path, force=False)
-
-    assert set(seen_langs) == {"id", "en"}
+    YouTubeMetadataWriter(FakeAiClient(reply)).generate(sb, tmp_path, force=False)
+    assert set(seen) == {"id", "en"}
     for lang in ("id", "en"):
-        out = tmp_path / "youtube" / lang / "youtube.txt"
-        assert out.exists()
-        content = out.read_text(encoding="utf-8")
+        content = (tmp_path / "youtube" / lang / "youtube.txt").read_text(encoding="utf-8")
         title = content.split("TITLE\n", 1)[1].split("\n\n", 1)[0]
         desc = content.split("DESCRIPTION\n", 1)[1].split("\n\nKEYWORDS", 1)[0]
         kw = content.split("KEYWORDS\n", 1)[1].strip()
-        assert len(title) <= g.YT_TITLE_MAX and "🚀" not in title and "#nope" not in title
-        assert len(desc) <= g.YT_DESC_MAX and "🚀" not in desc
-        # hashtags capped at 15 in the description
+        assert len(title) <= config.YT_TITLE_MAX and "🚀" not in title and "#nope" not in title
+        assert len(desc) <= config.YT_DESC_MAX and "🚀" not in desc
         assert len(re.findall(r"#\w+", desc)) <= 15
-        assert len(kw) <= g.YT_KEYWORDS_MAX and "#" not in kw
+        assert len(kw) <= config.YT_KEYWORDS_MAX and "#" not in kw
 
 
-def test_generate_youtube_skips_on_cli_failure(g, tmp_path, monkeypatch):
-    sb = _sb(g, languages=["id"],
-             scenes=[g.Scene(basename="01_x", classname="X", file="s.py",
-                             fallback_duration=10, description="d",
-                             narration={"id": "Halo."})])
+def test_youtube_writer_skips_on_cli_failure(tmp_path):
+    sb = make_storyboard(languages=["id"],
+                         scenes=[Scene("01_x", "X", "s.py", 10, "d", {"id": "Halo."})])
     d = tmp_path / "scripts" / "id"
     d.mkdir(parents=True)
     (d / "01_x.txt").write_text("Materi.", encoding="utf-8")
 
-    def boom(cli, prompt):
+    def boom(prompt):
         raise SystemExit("claude not logged in")
 
-    monkeypatch.setattr(g, "run_ai_cli", boom)
-    # must NOT raise, and must NOT write the file
-    g.generate_youtube(sb, tmp_path, force=False)
+    YouTubeMetadataWriter(FakeAiClient(boom)).generate(sb, tmp_path, force=False)  # must not raise
     assert not (tmp_path / "youtube" / "id" / "youtube.txt").exists()
 
 
-def test_generate_youtube_skips_when_no_transcript(g, tmp_path, monkeypatch):
-    sb = _sb(g, languages=["id"],
-             scenes=[g.Scene(basename="01_x", classname="X", file="s.py",
-                             fallback_duration=10, description="d", narration={})])
-    called = {"n": 0}
-    monkeypatch.setattr(g, "run_ai_cli", lambda *a, **k: called.__setitem__("n", called["n"] + 1) or "{}")
-    g.generate_youtube(sb, tmp_path, force=False)
-    assert called["n"] == 0
+def test_youtube_writer_skips_when_no_transcript(tmp_path):
+    sb = make_storyboard(languages=["id"],
+                         scenes=[Scene("01_x", "X", "s.py", 10, "d", {})])
+    fake = FakeAiClient("{}")
+    YouTubeMetadataWriter(fake).generate(sb, tmp_path, force=False)
+    assert fake.prompts == []                         # never asked the AI
     assert not (tmp_path / "youtube" / "id" / "youtube.txt").exists()
+
+
+# --- CLI overrides ---------------------------------------------------------
+
+
+def test_apply_cli_overrides_tts_and_voice():
+    sb = make_storyboard(tts_provider="edge",
+                         voices={"id": "id-ID-ArdiNeural", "en": "en-US-GuyNeural"})
+    options = BuildOptions(storyboard="x.md", output="out", ai_cli="codex",
+                           tts="gemini", voice="Charon", gemini_api_key="k")
+    apply_cli_overrides(sb, options)
+    assert sb.tts_provider == "gemini"
+    assert set(sb.voices.values()) == {"Charon"}
+    assert sb.ai_cli == "codex" and sb.gemini_api_key == "k"
+
+
+def test_apply_cli_overrides_noop_when_unset():
+    sb = make_storyboard(tts_provider="edge", voices={"id": "v"}, ai_cli="claude")
+    options = BuildOptions(storyboard="x.md", output="out", ai_cli=None, tts=None,
+                           voice=None, gemini_api_key=None)
+    apply_cli_overrides(sb, options)
+    assert sb.tts_provider == "edge" and sb.voices == {"id": "v"} and sb.ai_cli == "claude"
+
+
+# --- AI clients use the max model / capacity by default --------------------
+
+
+def _capture_command(client, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(client, "_resolve_binary", lambda: client.name)
+    monkeypatch.setattr(client, "_run", lambda cmd, prompt: captured.setdefault("cmd", cmd) or "")
+    client.generate("hi")
+    return captured["cmd"]
+
+
+def test_claude_command_uses_max_model_and_effort(monkeypatch):
+    from vgen.ai_client import ClaudeClient
+    cmd = _capture_command(ClaudeClient(), monkeypatch)
+    assert config.DEFAULT_CLAUDE_MODEL in cmd
+    assert "--effort" in cmd and config.DEFAULT_CLAUDE_EFFORT in cmd
+
+
+def test_codex_command_uses_max_reasoning(monkeypatch):
+    from vgen.ai_client import CodexClient
+    cmd = _capture_command(CodexClient(), monkeypatch)
+    assert any("model_reasoning_effort" in str(x) and config.DEFAULT_CODEX_REASONING in str(x)
+               for x in cmd)
+
+
+def test_codex_omits_model_by_default(monkeypatch):
+    # ChatGPT-account logins reject an explicit model, so we don't force one.
+    from vgen.ai_client import CodexClient
+    assert "--model" not in _capture_command(CodexClient(model=None), monkeypatch)
+
+
+def test_codex_pins_model_when_set(monkeypatch):
+    from vgen.ai_client import CodexClient
+    cmd = _capture_command(CodexClient(model="gpt-5"), monkeypatch)
+    assert "--model" in cmd and "gpt-5" in cmd
+
+
+# --- per-scene validate-and-refine loop ------------------------------------
+
+
+class _FakeValidator:
+    """A SceneValidator stand-in: fails the check ``fail_times`` times, then passes."""
+
+    def __init__(self, fail_times=0, problem="OVERFLOW: text past frame", is_layout=True):
+        self.fail_times = fail_times
+        self.problem = problem
+        self.is_layout = is_layout
+        self.calls = 0
+
+    def check_scene(self, *args, **kwargs):
+        self.calls += 1
+        if self.calls <= self.fail_times:
+            return False, self.problem, self.is_layout
+        return True, "", False
+
+
+def _synth_with_validator(validator, attempts):
+    return SceneSynthesizer(FakeAiClient("from manim import *\n"),
+                            validator=validator, validate_attempts=attempts)
+
+
+def test_validate_and_fix_refines_until_pass(tmp_path, monkeypatch):
+    sb = make_storyboard(languages=["id"])
+    validator = _FakeValidator(fail_times=2)
+    synth = _synth_with_validator(validator, attempts=10)
+    repairs = {"n": 0}
+    monkeypatch.setattr(synth, "repair",
+                        lambda *a, **k: repairs.__setitem__("n", repairs["n"] + 1))
+    scene = Scene("01_x", "X", "scene_01_x.py", 10, "d", {"id": "Halo."})
+    scene_path = tmp_path / "scene_01_x.py"
+    scene_path.write_text("x")
+    synth._validate_and_fix(sb, tmp_path, scene, "landscape", scene_path)
+    assert validator.calls == 3 and repairs["n"] == 2   # failed twice, passed on the 3rd
+
+
+def test_validate_and_fix_gives_up_after_attempts(tmp_path, monkeypatch):
+    sb = make_storyboard(languages=["id"])
+    validator = _FakeValidator(fail_times=99)            # never passes
+    synth = _synth_with_validator(validator, attempts=3)
+    monkeypatch.setattr(synth, "repair", lambda *a, **k: None)
+    scene = Scene("01_x", "X", "scene_01_x.py", 10, "d", {"id": "Halo."})
+    scene_path = tmp_path / "scene_01_x.py"
+    scene_path.write_text("x")
+    with pytest.raises(SystemExit) as ei:
+        synth._validate_and_fix(sb, tmp_path, scene, "landscape", scene_path)
+    assert "after 3 refine attempt" in str(ei.value)
+
+
+def test_validate_and_fix_noop_without_validator(tmp_path):
+    sb = make_storyboard(languages=["id"])
+    synth = SceneSynthesizer(FakeAiClient())             # no validator
+    scene = Scene("01_x", "X", "scene_01_x.py", 10, "d", {"id": "Halo."})
+    scene_path = tmp_path / "scene_01_x.py"
+    scene_path.write_text("x")
+    synth._validate_and_fix(sb, tmp_path, scene, "landscape", scene_path)  # must not raise
+
+
+# --- storyboard refinement (over-dense -> rewrite, within the cap) ---------
+
+from conftest import storyboard_text  # noqa: E402  (kept near its users)
+
+
+def test_refiner_returns_within_cap_storyboard(tmp_path):
+    src = write_storyboard(tmp_path / "sb.md",
+                           scenes=[{"basename": "01_a", "classname": "A", "duration": 90},
+                                   {"basename": "02_b", "classname": "B", "duration": 90}])
+    # The AI "splits/trims" into three lighter scenes that still total <= 180s.
+    revised = storyboard_text(scenes=[
+        {"basename": "01_a", "classname": "A", "duration": 60},
+        {"basename": "02_b", "classname": "B", "duration": 60},
+        {"basename": "03_c", "classname": "C", "duration": 50},
+    ])
+    refiner = StoryboardRefiner(FakeAiClient(revised))
+    sb = refiner.refine(src, tmp_path, cap_seconds=180.0)
+    assert [s.basename for s in sb.scenes] == ["01_a", "02_b", "03_c"]
+    assert sb.duration_budget() <= 180.0
+    assert (tmp_path / "storyboard.refined.md").exists()   # revision saved, original untouched
+
+
+def test_refiner_retries_when_over_cap(tmp_path):
+    src = write_storyboard(tmp_path / "sb.md",
+                           scenes=[{"basename": "01_a", "classname": "A", "duration": 90}])
+    over = storyboard_text(scenes=[{"basename": "01_a", "classname": "A", "duration": 200}])  # > 180
+    ok = storyboard_text(scenes=[{"basename": "01_a", "classname": "A", "duration": 120}])
+    replies = iter([over, ok])
+
+    refiner = StoryboardRefiner(FakeAiClient(lambda _p: next(replies)))
+    sb = refiner.refine(src, tmp_path, cap_seconds=180.0, attempts=3)
+    assert sb.duration_budget() == 120.0
+
+
+def test_refiner_gives_up_after_attempts(tmp_path):
+    src = write_storyboard(tmp_path / "sb.md",
+                           scenes=[{"basename": "01_a", "classname": "A", "duration": 90}])
+    always_over = storyboard_text(scenes=[{"basename": "01_a", "classname": "A", "duration": 300}])
+    refiner = StoryboardRefiner(FakeAiClient(always_over))
+    with pytest.raises(SystemExit) as ei:
+        refiner.refine(src, tmp_path, cap_seconds=180.0, attempts=2)
+    assert "within the 180s cap" in str(ei.value)
+
+
+def test_refiner_strips_fence_and_prose(tmp_path):
+    src = write_storyboard(tmp_path / "sb.md")
+    body = storyboard_text(scenes=[{"basename": "01_a", "classname": "A", "duration": 30}])
+    reply = "Sure, here is the revised storyboard:\n```markdown\n" + body + "\n```\nHope it helps!"
+    sb = StoryboardRefiner(FakeAiClient(reply)).refine(src, tmp_path, cap_seconds=180.0)
+    assert [s.basename for s in sb.scenes] == ["01_a"]
+
+
+def test_scenes_changed_detects_plan_edits():
+    a = make_storyboard(scenes=[Scene("01_a", "A", "s.py", 30, "desc", {})])
+    same = make_storyboard(scenes=[Scene("01_a", "A", "s.py", 30, "desc", {})])
+    different = make_storyboard(scenes=[Scene("01_a", "A", "s.py", 20, "desc", {})])  # duration
+    assert _scenes_changed(a, same) is False
+    assert _scenes_changed(a, different) is True

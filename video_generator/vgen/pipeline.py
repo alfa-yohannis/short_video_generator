@@ -1,0 +1,291 @@
+"""The pipeline that ties every stage together.
+
+`VideoPipeline` is the *orchestrator*: it owns the storyboard, the output
+directory, the build options, and one instance of each collaborator service
+(narration writer, scene synthesizer, renderer, TTS engine, ...). Those
+collaborators are passed in (*dependency injection*), so the pipeline doesn't
+build them itself — that keeps it easy to test with fakes and easy to read,
+because each method does one stage and delegates the work.
+
+``run_build(options)`` is the top-level entry: it checks dependencies, parses
+the storyboard, applies CLI overrides, wires up a pipeline and runs it.
+"""
+
+from __future__ import annotations
+
+import shutil
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import List, Optional
+
+from . import config
+from .ai_client import create_ai_client
+from .assembly import ClipAssembler
+from .dependencies import DependencyChecker
+from .duration import DurationFitter
+from .models import Storyboard
+from .narration import NarrationWriter
+from .progress import progress
+from .refine import StoryboardRefiner
+from .renderer import ManimRenderer, SceneValidator
+from .scenes import SceneSynthesizer
+from .storyboard import StoryboardParser
+from .tts import GEMINI_ALIASES, TtsEngine, create_tts_engine, resolve_gemini_key
+from .youtube import YouTubeMetadataWriter
+
+
+@dataclass
+class BuildOptions:
+    """Everything the command line can choose about a build."""
+
+    storyboard: Path
+    output: Path
+    stage: str = "all"
+    only: Optional[List[str]] = None
+    force: bool = False
+    ai_cli: Optional[str] = "claude"
+    tts: Optional[str] = None
+    voice: Optional[str] = None
+    gemini_api_key: Optional[str] = None
+    check_layout: str = "off"
+    repair_attempts: int = 2
+    validate_scenes: bool = False     # render-check each scene right after generating it
+    validate_attempts: int = 10       # how many times to refine a failing scene
+    refine_storyboard: bool = False   # let the AI rewrite an over-dense storyboard first
+    skip_youtube: bool = False
+    skip_dep_check: bool = False
+    no_ai_cli_check: bool = False
+
+
+class VideoPipeline:
+    """Runs the eight build stages, delegating each to an injected collaborator."""
+
+    def __init__(self, storyboard: Storyboard, output: Path, options: BuildOptions,
+                 *, narration: NarrationWriter, scene_synth: SceneSynthesizer,
+                 renderer: ManimRenderer, tts: TtsEngine, assembler: ClipAssembler,
+                 youtube: YouTubeMetadataWriter, duration: DurationFitter) -> None:
+        self.storyboard = storyboard
+        self.output = output
+        self.options = options
+        self.narration = narration
+        self.scene_synth = scene_synth
+        self.renderer = renderer
+        self.tts = tts
+        self.assembler = assembler
+        self.youtube = youtube
+        self.duration = duration
+
+    # --- the eight stages --------------------------------------------------
+
+    def stage_scripts(self) -> None:
+        self.narration.write_scripts(self.storyboard, self.output)
+
+    def stage_audio(self) -> None:
+        # Make sure narration exists even if --stage audio is run on its own.
+        for scene in self.storyboard.scenes:
+            for lang in self.storyboard.languages:
+                self.narration.ensure(self.storyboard, scene, lang, output=self.output)
+        self.duration.fit_before_tts(self.storyboard, self.output)        # estimate + compress
+        self.tts.synthesize_storyboard(self.storyboard, self.output, self.options.force)
+        self.duration.enforce_after_tts(self.storyboard, self.output)     # measure + re-narrate
+
+    def stage_scenes(self) -> None:
+        self.scene_synth.ensure_all(self.storyboard, self.output, self.options.force)
+
+    def stage_render(self) -> None:
+        # Render assumes scene .py files exist; generate any that are missing.
+        self.scene_synth.ensure_all(self.storyboard, self.output, force=False)
+        for lang in self.storyboard.languages:
+            for orient in self.storyboard.orientations:
+                self.renderer.render(self.storyboard, self.output, lang, orient,
+                                     self.options.force, check_layout=self.options.check_layout,
+                                     repair_attempts=self.options.repair_attempts)
+
+    def stage_mux(self) -> None:
+        for lang in self.storyboard.languages:
+            for orient in self.storyboard.orientations:
+                self.assembler.mux(self.storyboard, self.output, lang, orient, self.options.force)
+
+    def stage_concat(self) -> None:
+        for lang in self.storyboard.languages:
+            for orient in self.storyboard.orientations:
+                final = self.assembler.concat(self.storyboard, self.output, lang, orient,
+                                              self.options.force)
+                progress.log(f"  -> {final}")
+
+    def stage_srt(self) -> None:
+        for lang in self.storyboard.languages:
+            merged = self.assembler.merge_subtitles(self.storyboard, self.output, lang)
+            progress.log(f"  -> {merged}")
+
+    def stage_youtube(self) -> None:
+        self.youtube.generate(self.storyboard, self.output, self.options.force)
+
+    # --- driver ------------------------------------------------------------
+
+    def run(self) -> None:
+        """Run the requested stage(s), each wrapped with a header + timing line."""
+        stage = self.options.stage
+        plan = [
+            ("scripts", "[1/8] write narration scripts (AI-generated when missing)", self.stage_scripts),
+            ("audio",   "[2/8] generate audio + per-scene SRTs", self.stage_audio),
+            ("scenes",  "[3/8] materialize scene .py files (AI-generated when missing)", self.stage_scenes),
+            ("render",  "[4/8] render Manim scenes", self.stage_render),
+            ("mux",     "[5/8] mux clips (video + audio)", self.stage_mux),
+            ("concat",  "[6/8] concat per-scene clips into final videos", self.stage_concat),
+            ("srt",     "[7/8] merge per-scene SRTs into final SRTs", self.stage_srt),
+            ("youtube", "[8/8] generate YouTube metadata (per language)", self.stage_youtube),
+        ]
+        for name, label, runner in plan:
+            if stage not in ("all", name):
+                continue
+            if name == "youtube" and self.options.skip_youtube:
+                continue
+            with progress.stage(label):
+                runner()
+        progress.log(f"Done in {progress.clock()}.")
+
+
+# =====================================================================
+# Top-level build entry point
+# =====================================================================
+
+def build_pipeline(storyboard: Storyboard, output: Path, options: BuildOptions) -> VideoPipeline:
+    """Wire a :class:`VideoPipeline` from a storyboard (the composition root).
+
+    This is the one place that knows which concrete classes implement each role,
+    so the rest of the program depends only on the interfaces.
+    """
+    ai_client = create_ai_client(storyboard.ai_cli)
+    tts_engine = create_tts_engine(storyboard)
+    # When --validate-scenes is on, give the synthesizer a validator so it
+    # render-checks (and refines) each scene the moment it is generated.
+    validator = SceneValidator() if options.validate_scenes else None
+    scene_synth = SceneSynthesizer(ai_client, validator=validator,
+                                   validate_attempts=options.validate_attempts)
+    return VideoPipeline(
+        storyboard, output, options,
+        narration=NarrationWriter(ai_client),
+        scene_synth=scene_synth,
+        renderer=ManimRenderer(scene_synth),
+        tts=tts_engine,
+        assembler=ClipAssembler(),
+        youtube=YouTubeMetadataWriter(ai_client),
+        duration=DurationFitter(ai_client, tts_engine),
+    )
+
+
+def apply_cli_overrides(storyboard: Storyboard, options: BuildOptions) -> None:
+    """Let command-line flags override storyboard settings, in place.
+
+    The storyboard stays portable while a single invocation picks the narrator,
+    TTS provider, voice, or API key. A single ``--voice`` applies to every
+    language (per-language control still lives in the storyboard).
+    """
+    if options.ai_cli:
+        storyboard.ai_cli = options.ai_cli
+    if options.tts:
+        storyboard.tts_provider = options.tts
+    if options.voice:
+        storyboard.voices = {lang: options.voice for lang in storyboard.languages}
+    if options.gemini_api_key:
+        storyboard.gemini_api_key = options.gemini_api_key
+
+
+def run_build(options: BuildOptions) -> None:
+    """Check dependencies, parse + configure the storyboard, and run the pipeline."""
+    progress.reset()
+    storyboard_path = Path(options.storyboard).resolve()
+
+    if not options.skip_dep_check:
+        if options.no_ai_cli_check:
+            need_ai_cli = None
+        else:  # the CLI flag wins; otherwise use what the storyboard declares
+            need_ai_cli = options.ai_cli or StoryboardParser.peek_ai_cli(storyboard_path)
+        DependencyChecker().check(need_ai_cli=need_ai_cli)
+
+    storyboard = StoryboardParser().parse(storyboard_path)
+    apply_cli_overrides(storyboard, options)
+
+    if (not options.skip_dep_check and storyboard.tts_provider in GEMINI_ALIASES
+            and not resolve_gemini_key(storyboard)):
+        raise SystemExit(
+            "gemini TTS selected but no API key found. Set GEMINI_API_KEY in the "
+            "environment or in a .env at the repo root, set `gemini_api_key:` in the "
+            "storyboard front-matter, or pass --gemini-api-key. "
+            "Get a key at https://aistudio.google.com/apikey."
+        )
+
+    output = Path(options.output).resolve()
+    output.mkdir(parents=True, exist_ok=True)
+
+    # Optional pre-pass: let the AI rewrite an over-dense storyboard (within the
+    # duration cap). If it actually changes the plan, the cached scripts/audio/
+    # scenes from the OLD plan are stale, so we must regenerate from scratch.
+    regenerate = options.force
+    if options.refine_storyboard:
+        cap = storyboard.max_duration or config.DEFAULT_DURATION_CAP_SECONDS
+        refined = StoryboardRefiner(create_ai_client(storyboard.ai_cli)).refine(
+            storyboard_path, output, cap)
+        if _scenes_changed(storyboard, refined):
+            progress.log("  storyboard changed by refinement — regenerating everything "
+                         "from the start")
+            regenerate = True
+        storyboard = refined
+        apply_cli_overrides(storyboard, options)   # re-apply flags to the new storyboard
+
+    if regenerate:
+        _wipe_outputs(output)
+    output.mkdir(parents=True, exist_ok=True)
+
+    _print_header(storyboard, output)
+
+    if options.only:
+        wanted = set(options.only)
+        storyboard.scenes = [s for s in storyboard.scenes if s.basename in wanted]
+        if not storyboard.scenes:
+            raise SystemExit(f"No scenes matched --only filter: {options.only}")
+
+    build_pipeline(storyboard, output, options).run()
+
+
+def _scenes_changed(before: Storyboard, after: Storyboard) -> bool:
+    """True if refinement altered the scene plan (basename / description / duration).
+
+    Compared on content, not whitespace, so a cosmetically-reformatted but
+    identical storyboard does NOT trigger a needless full rebuild.
+    """
+    def signature(sb: Storyboard):
+        return [(s.basename, s.description.strip(), s.fallback_duration) for s in sb.scenes]
+    return signature(before) != signature(after)
+
+
+def _wipe_outputs(output: Path) -> None:
+    """Delete every generator-owned subdirectory under ``output`` (for --force /
+    a storyboard that refinement changed). The refined storyboard .md is a file
+    in the output root, so it is left in place."""
+    removed = [name for name in config.WIPE_SUBDIRS if (output / name).exists()]
+    for name in removed:
+        shutil.rmtree(output / name)
+    if removed:
+        print(f"  wiped {', '.join(removed)} under {output} (regenerating from scratch)")
+    else:
+        print("  nothing to wipe (output dir was already clean)")
+
+
+def _print_header(storyboard: Storyboard, output: Path) -> None:
+    print(f"Output dir:   {output}")
+    print(f"Title:        {storyboard.title}")
+    print(f"Languages:    {storyboard.languages}")
+    print(f"Orientations: {storyboard.orientations}")
+    print(f"Scenes:       {len(storyboard.scenes)} -> "
+          f"{', '.join(s.basename for s in storyboard.scenes)}")
+    print(f"TTS:          {storyboard.tts_provider} (voices: {storyboard.voices})")
+    print(f"AI CLI:       {storyboard.ai_cli}")
+    print(f"Scenes dirs:  landscape={storyboard.scenes_landscape_dir}, "
+          f"portrait={storyboard.scenes_portrait_dir}")
+    if storyboard.max_duration is not None:
+        print(f"Duration:     budget {storyboard.duration_budget():.0f}s / "
+              f"cap {storyboard.max_duration:.0f}s")
+    print()

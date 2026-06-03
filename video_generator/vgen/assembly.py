@@ -1,0 +1,107 @@
+"""Assembling per-scene clips into the final videos and subtitle files.
+
+`ClipAssembler` does the three ffmpeg-driven steps after rendering:
+
+* :meth:`mux` — add each scene's narration audio onto its silent video clip,
+* :meth:`concat` — join a language+orientation's clips into one final video,
+* :meth:`merge_subtitles` — stitch the per-scene SRTs into one, offsetting each
+  scene's cues by the running clip duration.
+
+All three skip work that's already up to date (by file mtime), so a partially
+finished build resumes cheaply.
+"""
+
+from __future__ import annotations
+
+import subprocess
+from datetime import timedelta
+from pathlib import Path
+from typing import List
+
+from .media import ffprobe_duration, is_up_to_date
+from .models import Storyboard
+
+
+class ClipAssembler:
+    """Muxes, concatenates and merges subtitles for a finished render."""
+
+    def mux(self, storyboard: Storyboard, output: Path, lang: str, orient: str,
+            force: bool) -> None:
+        """Combine each scene's silent video with its narration mp3."""
+        clip_dir = output / "clips" / lang / orient
+        clip_dir.mkdir(parents=True, exist_ok=True)
+        for scene in storyboard.scenes:
+            video = output / "video" / lang / orient / f"{scene.basename}.mp4"
+            audio = output / "audio" / lang / f"{scene.basename}.mp3"
+            clip = clip_dir / f"{scene.basename}.mp4"
+            # Re-mux when either input is newer than the muxed clip.
+            if not force and is_up_to_date(clip, video, audio):
+                continue
+            if not video.exists() or not audio.exists():
+                raise SystemExit(f"Missing inputs for muxing {clip}: {video}, {audio}")
+            subprocess.run(
+                ["ffmpeg", "-y", "-loglevel", "error",
+                 "-i", str(video), "-i", str(audio),
+                 "-map", "0:v:0", "-map", "1:a:0",
+                 "-c:v", "copy",
+                 "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+                 "-af", "aresample=48000,pan=stereo|c0=c0|c1=c0",
+                 "-shortest", "-movflags", "+faststart",
+                 str(clip)],
+                check=True,
+            )
+
+    def concat(self, storyboard: Storyboard, output: Path, lang: str, orient: str,
+               force: bool = False) -> Path:
+        """Concatenate a language+orientation's clips into one final video."""
+        clip_dir = output / "clips" / lang / orient
+        final_dir = output / "final" / lang
+        final_dir.mkdir(parents=True, exist_ok=True)
+        final_path = final_dir / f"{storyboard.title}_{orient}.mp4"
+        clips = [clip_dir / f"{sc.basename}.mp4" for sc in storyboard.scenes]
+        # Skip the re-encode when the final is already newer than every clip.
+        if not force and is_up_to_date(final_path, *clips):
+            return final_path
+        list_path = clip_dir / "concat_list.txt"
+        list_path.write_text(
+            "\n".join(f"file '{sc.basename}.mp4'" for sc in storyboard.scenes) + "\n",
+            encoding="utf-8",
+        )
+        subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error",
+             "-f", "concat", "-safe", "0", "-i", str(list_path),
+             "-r", str(storyboard.fps),
+             "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
+             "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+             "-movflags", "+faststart",
+             str(final_path)],
+            check=True,
+        )
+        return final_path
+
+    def merge_subtitles(self, storyboard: Storyboard, output: Path, lang: str) -> Path:
+        """Merge per-scene SRTs into one, offsetting each scene by the clip length."""
+        import srt as srt_lib  # lazy import so a missing dependency can be installed
+
+        srt_dir = output / "subtitles" / lang
+        merged: List = []
+        offset = timedelta(0)
+        index = 1
+        orient = "landscape" if "landscape" in storyboard.orientations else storyboard.orientations[0]
+        for scene in storyboard.scenes:
+            clip = output / "clips" / lang / orient / f"{scene.basename}.mp4"
+            duration = timedelta(seconds=ffprobe_duration(clip))
+            srt_path = srt_dir / f"{scene.basename}.srt"
+            if srt_path.exists():
+                for cue in srt_lib.parse(srt_path.read_text(encoding="utf-8")):
+                    merged.append(srt_lib.Subtitle(
+                        index=index,
+                        start=cue.start + offset,
+                        end=cue.end + offset,
+                        content=cue.content,
+                    ))
+                    index += 1
+            offset += duration
+        out_path = srt_dir / f"{storyboard.title}.srt"
+        out_path.write_text(srt_lib.compose(merged), encoding="utf-8")
+        return out_path
