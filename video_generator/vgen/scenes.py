@@ -80,19 +80,24 @@ class SceneSynthesizer:
             shutil.copytree(config.TEMPLATES_DIR / "assets", assets_target)
         return target
 
-    def ensure_all(self, storyboard: Storyboard, output: Path, force: bool) -> Tuple[Path, Path]:
-        """Make sure every scene ``.py`` exists for both orientations.
+    def ensure_all(self, storyboard: Storyboard, output: Path, force: bool) -> Tuple[Optional[Path], Optional[Path]]:
+        """Make sure every scene ``.py`` exists for each requested orientation.
 
-        Updates ``storyboard.scenes_landscape_dir`` / ``scenes_portrait_dir`` to
-        the directories actually used, and returns them.
+        Only the orientations in ``storyboard.orientations`` are materialized and
+        generated (so ``--orientation landscape`` never spends AI calls on
+        portrait). Updates ``storyboard.scenes_landscape_dir`` /
+        ``scenes_portrait_dir`` to the directories actually used, and returns them
+        (``None`` for an orientation that wasn't requested).
         """
-        landscape_dir = self.materialize_dir(storyboard, output, "landscape")
-        portrait_dir = self.materialize_dir(storyboard, output, "portrait")
+        dirs = {orient: self.materialize_dir(storyboard, output, orient)
+                for orient in storyboard.orientations}
+        landscape_dir = dirs.get("landscape")
+        portrait_dir = dirs.get("portrait")
         storyboard.scenes_landscape_dir = landscape_dir
         storyboard.scenes_portrait_dir = portrait_dir
 
         skeleton = self._read_skeleton()
-        for orient, scenes_dir in (("landscape", landscape_dir), ("portrait", portrait_dir)):
+        for orient, scenes_dir in dirs.items():
             common_src = self._read_common(scenes_dir)
             for scene in storyboard.scenes:
                 scene_path = scenes_dir / scene.file

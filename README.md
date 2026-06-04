@@ -25,6 +25,7 @@ and the TTS engine are swappable.
 
 - **One storyboard in, narrated videos out** — landscape *and* portrait from the
   same scene sources, so the result doubles as long-form and Reels/Shorts/TikTok.
+  Generate both (default) or just one with `--orientation {landscape,portrait}`.
 - **Bilingual** — Indonesian + English narration, audio, and subtitles in one run.
 - **Swappable narrator** — Claude Code (default, reuses your `claude` session, no
   API key) or the Codex CLI (`--ai-cli codex`). Used to write missing narration
@@ -305,6 +306,10 @@ python3 video_generator/generate_video.py --storyboard SB.md --output OUT \
 python3 video_generator/generate_video.py --storyboard SB.md --output OUT \
     --voice id-ID-GadisNeural
 
+# Portrait only (Reels/Shorts/TikTok) — skips all landscape work
+python3 video_generator/generate_video.py --storyboard SB.md --output OUT \
+    --orientation portrait
+
 # Smoke-test one scene's narration + audio only
 python3 video_generator/generate_video.py --storyboard SB.md --output OUT \
     --stage audio --only 01_pengantar
@@ -328,6 +333,7 @@ python3 video_generator/generate_video.py --storyboard SB.md --output OUT --forc
 | `--effort {low,medium,high,xhigh,max}` | `high` | Reasoning effort for the **Claude** AI CLI (pass `max` for the top tier). Ignored when `--ai-cli codex` |
 | `--tts {edge,gemini}` | *(front-matter)* | TTS provider. Overrides `tts_provider:` when set |
 | `--voice NAME` | *(front-matter)* | Override the voice for every language this run |
+| `--orientation {landscape,portrait,both}` | `both` | Which orientation(s) to generate. `landscape`/`portrait` restrict the whole run to one; `both` uses the storyboard's `orientations:` (itself defaulting to both) |
 | `--gemini-api-key KEY` | *(env / .env)* | Gemini API key |
 | `--check-layout {off,warn,strict,fit}` | `off` | At render time, check each scene's text for overflow/clipping, portrait caption-zone violations, and overlap. `warn` logs; `strict` fails the render; `fit` auto-scales/nudges overflowing text back inside the frame as it renders |
 | `--repair-attempts N` (alias `--layout-repair-attempts`) | `2` | How many times to ask the AI CLI to fix a scene that fails to render — or fails `--check-layout strict` — then re-render, before giving up (`0` disables AI repair) |

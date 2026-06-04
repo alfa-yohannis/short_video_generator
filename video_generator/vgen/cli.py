@@ -56,6 +56,12 @@ def build_parser() -> argparse.ArgumentParser:
              "(e.g. id-ID-GadisNeural for edge, or Charon for gemini).",
     )
     parser.add_argument(
+        "--orientation", choices=["landscape", "portrait", "both"], default="both",
+        help="Which orientation(s) to generate (default: both). 'landscape' or "
+             "'portrait' restricts the whole run to that one; 'both' uses the "
+             "storyboard's 'orientations:' (which itself defaults to both).",
+    )
+    parser.add_argument(
         "--gemini-api-key", default=None,
         help="Gemini API key. Defaults to $GEMINI_API_KEY, then a .env at the "
              "repo root, then 'gemini_api_key:' in the storyboard front-matter.",
@@ -112,6 +118,7 @@ def options_from_args(args: argparse.Namespace) -> BuildOptions:
         effort=args.effort,
         tts=args.tts,
         voice=args.voice,
+        orientation=args.orientation,
         gemini_api_key=args.gemini_api_key,
         check_layout=args.check_layout,
         repair_attempts=args.repair_attempts,

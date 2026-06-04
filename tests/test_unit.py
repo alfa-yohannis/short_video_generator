@@ -764,6 +764,20 @@ def test_apply_cli_overrides_tts_and_voice():
     assert sb.ai_cli == "codex" and sb.gemini_api_key == "k"
 
 
+def test_apply_cli_overrides_orientation_restricts_to_one():
+    sb = make_storyboard()                       # defaults to [landscape, portrait]
+    options = BuildOptions(storyboard="x.md", output="out", orientation="portrait")
+    apply_cli_overrides(sb, options)
+    assert sb.orientations == ["portrait"]
+
+
+def test_apply_cli_overrides_orientation_both_keeps_storyboard():
+    sb = make_storyboard()                       # [landscape, portrait]
+    options = BuildOptions(storyboard="x.md", output="out", orientation="both")
+    apply_cli_overrides(sb, options)
+    assert sb.orientations == ["landscape", "portrait"]
+
+
 def test_apply_cli_overrides_noop_when_unset():
     sb = make_storyboard(tts_provider="edge", voices={"id": "v"}, ai_cli="claude")
     options = BuildOptions(storyboard="x.md", output="out", ai_cli=None, tts=None,

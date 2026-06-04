@@ -50,6 +50,7 @@ class BuildOptions:
     effort: str = config.DEFAULT_CLAUDE_EFFORT   # Claude reasoning tier; codex ignores it
     tts: Optional[str] = None
     voice: Optional[str] = None
+    orientation: str = "both"   # landscape | portrait | both (both = use storyboard's)
     gemini_api_key: Optional[str] = None
     check_layout: str = "off"
     repair_attempts: int = 2
@@ -192,6 +193,8 @@ def apply_cli_overrides(storyboard: Storyboard, options: BuildOptions) -> None:
         storyboard.tts_provider = options.tts
     if options.voice:
         storyboard.voices = {lang: options.voice for lang in storyboard.languages}
+    if options.orientation and options.orientation != "both":
+        storyboard.orientations = [options.orientation]
     if options.gemini_api_key:
         storyboard.gemini_api_key = options.gemini_api_key
 
