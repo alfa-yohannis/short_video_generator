@@ -43,9 +43,23 @@ VENV_MARK = "VIDEO_GENERATOR_VENV"
 # --- Default voices / models -----------------------------------------------
 # Used when the storyboard's `voices:` map omits a language, or when a
 # provider/voice/model isn't pinned on the command line.
-DEFAULT_EDGE_VOICE = "id-ID-ArdiNeural"
-DEFAULT_GEMINI_VOICE = "Iapetus"
+DEFAULT_EDGE_VOICE = "id-ID-ArdiNeural"          # generic fallback for unknown langs
+# Per-language Edge defaults, so English narration isn't voiced by the Indonesian
+# default when the storyboard omits a `voices:` map.
+DEFAULT_EDGE_VOICES = {
+    "id": "id-ID-ArdiNeural",
+    "en": "en-US-AndrewNeural",
+}
+DEFAULT_GEMINI_VOICE = "Iapetus"                 # multilingual — one voice covers both
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash-preview-tts"
+
+# Friendly `voice: male|female` aliases for the simplified storyboard format,
+# resolved per language for the Edge engine. Gemini voices aren't gendered here,
+# so `voice: male|female` with gemini falls back to the Gemini default.
+EDGE_VOICES_BY_GENDER = {
+    "male":   {"id": "id-ID-ArdiNeural",  "en": "en-US-GuyNeural"},
+    "female": {"id": "id-ID-GadisNeural", "en": "en-US-JennyNeural"},
+}
 
 # Default Claude model + effort tier for narration / scene generation. Opus at
 # "high" effort gives strong layout-aware scene code; bump to "max" if you want

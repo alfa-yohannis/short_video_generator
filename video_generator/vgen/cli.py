@@ -64,7 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--gemini-api-key", default=None,
         help="Gemini API key. Defaults to $GEMINI_API_KEY, then a .env at the "
-             "repo root, then 'gemini_api_key:' in the storyboard front-matter.",
+             "repo root. (For security it is never read from the storyboard.)",
     )
     parser.add_argument(
         "--check-layout", choices=["off", "warn", "strict", "fit"], default="off",

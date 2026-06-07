@@ -75,9 +75,11 @@ class SceneSynthesizer:
         ):
             shutil.copy2(template_common, target_common)
 
-        assets_target = output / "assets"
-        if not assets_target.exists() and (config.TEMPLATES_DIR / "assets").exists():
-            shutil.copytree(config.TEMPLATES_DIR / "assets", assets_target)
+        assets_src = config.TEMPLATES_DIR / "assets"
+        if assets_src.exists():
+            # Merge-copy so new template assets (e.g. logo/) land in existing
+            # build dirs too, not only freshly-created ones.
+            shutil.copytree(assets_src, output / "assets", dirs_exist_ok=True)
         return target
 
     def ensure_all(self, storyboard: Storyboard, output: Path, force: bool) -> Tuple[Optional[Path], Optional[Path]]:

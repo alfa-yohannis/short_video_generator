@@ -150,7 +150,7 @@ def test_parse_storyboard_full(parser, tmp_path):
     sb = parser.parse(p)
     assert sb.title == "pythagorean" and sb.tts_provider == "gemini"
     assert sb.gemini_model == "gemini-2.5-flash-preview-tts"
-    assert sb.gemini_api_key == "from-front-matter"
+    assert sb.gemini_api_key is None          # never read from the storyboard (security)
     assert sb.voices == {"id": "id-ID-ArdiNeural", "en": "en-US-GuyNeural"}
     assert [s.basename for s in sb.scenes] == ["01_a", "02_b"]
     assert sb.project_brief
@@ -169,11 +169,86 @@ def test_parse_storyboard_defaults(parser, tmp_path):
     assert sb.languages == ["id", "en"] and sb.orientations == ["landscape", "portrait"]
 
 
-def test_parse_storyboard_requires_front_matter(parser, tmp_path):
+def test_parse_storyboard_front_matter_is_optional(parser, tmp_path):
+    # No front-matter at all: title comes from the '# ' heading, the body under a
+    # plain '## ' heading is the description.
     p = tmp_path / "no_fm.md"
-    p.write_text("# just a heading\n\n## Scene: 01_x / X\n", encoding="utf-8")
-    with pytest.raises(SystemExit):
-        parser.parse(p)
+    p.write_text("# Observer Pattern\n\nA brief.\n\n## Introduction (~150s)\n"
+                 "Show the title.\n", encoding="utf-8")
+    sb = parser.parse(p)
+    assert sb.title == "Observer Pattern"
+    assert sb.languages == ["id", "en"]                  # defaults apply
+    assert [s.basename for s in sb.scenes] == ["introduction"]
+    assert sb.scenes[0].description == "Show the title."
+    assert sb.scenes[0].fallback_duration == 150.0
+
+
+def test_parse_simplified_plain_scenes_and_inline_durations(parser, tmp_path):
+    p = tmp_path / "s.md"
+    p.write_text(
+        "---\nlanguage: both\nlength: 2-3 minutes\n---\n\n"
+        "# Decorator Pattern\n\nBrief here.\n\n"
+        "## Introduction (~70s)\nShow the title.\n\n"
+        "## The Problem (50 sec)\nThe pain.\n", encoding="utf-8")
+    sb = parser.parse(p)
+    assert sb.title == "Decorator Pattern"
+    assert sb.min_duration == 120.0 and sb.max_duration == 180.0    # "2-3 minutes" range
+    a, b = sb.scenes
+    assert a.basename == "introduction" and a.classname == "Introduction"
+    assert a.file == "scene_introduction.py" and a.fallback_duration == 70.0
+    assert a.description == "Show the title."
+    assert b.basename == "the_problem" and b.fallback_duration == 50.0
+
+
+def test_parse_simplified_non_duration_parens_kept_in_title(parser, tmp_path):
+    p = tmp_path / "s.md"
+    p.write_text("---\nmin_duration: 0\n---\n# T\n\n## Model-View-Controller (MVC)\nx.\n",
+                 encoding="utf-8")
+    sb = parser.parse(p)
+    assert sb.scenes[0].basename == "model_view_controller"   # "(MVC)" not a duration
+    assert sb.scenes[0].fallback_duration == 15.0             # default, untouched
+
+
+def test_parse_language_alias(parser, tmp_path):
+    for val, expect in [("both", ["id", "en"]), ("id", ["id"]), ("en", ["en"])]:
+        p = tmp_path / f"{val}.md"
+        p.write_text(f"---\nlanguage: {val}\n---\n# T\n\n## S (~150s)\nx.\n", encoding="utf-8")
+        assert parser.parse(p).languages == expect
+
+
+def test_parse_orientation_and_resolution_aliases(parser, tmp_path):
+    p = tmp_path / "s.md"
+    p.write_text("---\norientation: portrait\nresolution: 1280x720\n---\n"
+                 "# T\n\n## S (~150s)\nx.\n", encoding="utf-8")
+    sb = parser.parse(p)
+    assert sb.orientations == ["portrait"]
+    assert sb.resolution_landscape == (1280, 720)
+
+
+def test_parse_tts_and_ai_aliases(parser, tmp_path):
+    p = tmp_path / "s.md"
+    p.write_text("---\ntts: gemini\nai: codex\n---\n# T\n\n## S (~150s)\nx.\n", encoding="utf-8")
+    sb = parser.parse(p)
+    assert sb.tts_provider == "gemini" and sb.ai_cli == "codex"
+
+
+def test_parse_voice_alias(parser, tmp_path):
+    def voices(front):
+        p = tmp_path / "v.md"
+        p.write_text(f"---\n{front}\n---\n# T\n\n## S (~150s)\nx.\n", encoding="utf-8")
+        return parser.parse(p).voices
+    assert voices("voice: default") == {}
+    assert voices("voice: female\ntts: edge") == {"id": "id-ID-GadisNeural",
+                                                   "en": "en-US-JennyNeural"}
+    assert voices("voice: Iapetus\ntts: gemini") == {"id": "Iapetus", "en": "Iapetus"}
+    assert voices("voice: male\ntts: gemini") == {}     # gemini voices aren't gendered
+
+
+def test_parse_gemini_key_in_front_matter_is_ignored(parser, tmp_path):
+    p = tmp_path / "s.md"
+    p.write_text("---\ngemini_api_key: super-secret\nmin_duration: 0\n---\n"
+                 "# T\n\n## S\nx.\n", encoding="utf-8")
+    assert parser.parse(p).gemini_api_key is None
 
 
 def test_parse_storyboard_requires_a_scene(parser, tmp_path):
@@ -304,6 +379,15 @@ def test_voice_for_edge_from_map():
 
 def test_voice_for_edge_default():
     assert EdgeTtsEngine().voice_for(make_storyboard(voices={}), "id") == config.DEFAULT_EDGE_VOICE
+
+
+def test_voice_for_edge_english_default_is_not_indonesian():
+    # Regression: with no voices: map, English must use a per-language English
+    # default, NOT fall back to the Indonesian voice.
+    sb = make_storyboard(voices={})
+    voice = EdgeTtsEngine().voice_for(sb, "en")
+    assert voice == config.DEFAULT_EDGE_VOICES["en"] == "en-US-AndrewNeural"
+    assert voice != config.DEFAULT_EDGE_VOICE      # not id-ID-ArdiNeural
 
 
 def test_voice_for_gemini_default():

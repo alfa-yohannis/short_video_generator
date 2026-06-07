@@ -75,12 +75,17 @@ class TtsEngine(ABC):
 
     #: storyboard ``tts_provider`` value / log label.
     name: str = ""
-    #: voice used when the storyboard's ``voices:`` map omits a language.
+    #: voice used when neither the storyboard nor the per-language map has one.
     default_voice: str = ""
+    #: per-language default voices (overrides ``default_voice`` for that language).
+    default_voices: dict = {}
 
     def voice_for(self, storyboard, lang: str) -> str:
-        """The voice for a language: the storyboard's, else this engine's default."""
-        return storyboard.voices.get(lang) or self.default_voice
+        """The voice for a language: the storyboard's, else this engine's
+        per-language default, else the generic fallback."""
+        return (storyboard.voices.get(lang)
+                or self.default_voices.get(lang)
+                or self.default_voice)
 
     def prepare(self, storyboard) -> None:
         """Hook run once before synthesising (e.g. check a tool / key). No-op by default."""
@@ -132,6 +137,7 @@ class EdgeTtsEngine(TtsEngine):
 
     name = "edge-tts"
     default_voice = config.DEFAULT_EDGE_VOICE
+    default_voices = config.DEFAULT_EDGE_VOICES
 
     def prepare(self, storyboard) -> None:
         if not config.EDGE_TTS_BIN.exists():

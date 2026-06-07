@@ -93,8 +93,8 @@ class Storyboard:
             lines += [f"  {lang}: {voice}" for lang, voice in self.voices.items()]
         lines.append(f"tts_provider: {self.tts_provider}")
         lines.append(f"gemini_model: {self.gemini_model}")
-        if self.gemini_api_key:
-            lines.append(f"gemini_api_key: {self.gemini_api_key}")
+        # Intentionally never serialize gemini_api_key — secrets must not be
+        # written into storyboard.refined.md. It comes from CLI / env / .env.
         lines.append(f"ai_cli: {self.ai_cli}")
         lines.append(f"fps: {self.fps}")
         w, h = self.resolution_landscape

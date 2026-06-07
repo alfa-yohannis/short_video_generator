@@ -23,6 +23,19 @@ def strip_leading_digits(name: str) -> str:
     return re.sub(r"^[0-9]+[_\-\s]*", "", name)
 
 
+def slugify(name: str) -> str:
+    """``The Problem (MVC)`` -> ``the_problem``.
+
+    Lower-cases, drops any ``(...)`` qualifier, turns runs of non-alphanumerics
+    into single underscores. Used to derive a scene's file-stem from a plain
+    human heading in the simplified storyboard format.
+    """
+    name = re.sub(r"\(.*?\)", " ", name)          # drop "(MVC)" / "(~15s)" etc.
+    name = name.lower().replace("&", " and ")
+    name = re.sub(r"[^a-z0-9]+", "_", name)
+    return name.strip("_") or "scene"
+
+
 # A ``` fenced block, optionally tagged ```python / ```py. Group 1 is the code.
 _FENCE_BLOCK_RE = re.compile(r"```(?:python|py)?[ \t]*\n(.*?)```", re.S | re.I)
 

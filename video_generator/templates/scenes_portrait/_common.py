@@ -519,7 +519,8 @@ def _autofit_scene(scene, extra=()):
     portrait safe area. Runs before each play / wait so the fix is rendered."""
     if _layout_mode() != "fit":
         return
-    roots = list(scene.mobjects) + [m for m in extra if m is not None]
+    roots = [m for m in (list(scene.mobjects) + [m for m in extra if m is not None])
+             if not getattr(m, "_vgen_overlay", False)]   # never move the brand logo
     _autofit_boxes(roots)
     # Frame-clamp top-level items AND entering animation targets, so a clipped
     # element is corrected before its intro frame renders (no visible "pop"
@@ -531,12 +532,83 @@ def _autofit_scene(scene, extra=()):
         _fit_into_frame(m)
 
 
+# --- Brand logo overlay (bottom-right, per-language) ----------------------
+# A horizontal logo is pinned to the bottom-right of every scene: "Belajar"
+# (ayo-belajar-horizontal) for Indonesian, "Learn" (ayo-learn-horizontal) for
+# English. It's tagged ``_vgen_overlay`` so the layout self-check / auto-fit
+# never move or flag it. It's drawn BEHIND scene content (low z-index) so scene
+# objects are never covered by the logo. It sits at the literal bottom-right
+# corner; the play/wait hooks just re-add it if a scene clears the canvas.
+
+def _make_brand_logo():
+    """Build the language-specific horizontal logo, placed bottom-right."""
+    name = "ayo-learn-horizontal" if LANG_CODE == "en" else "ayo-belajar-horizontal"
+    logo_dir = ROOT_DIR / "assets" / "logo"
+    logo = None
+    svg = logo_dir / f"{name}.svg"
+    if svg.exists():
+        try:
+            logo = SVGMobject(str(svg))
+        except Exception:
+            logo = None
+    if logo is None or len(logo.submobjects) == 0:   # fall back to the PNG
+        png = logo_dir / f"{name}.png"
+        if png.exists():
+            try:
+                logo = ImageMobject(str(png))
+            except Exception:
+                logo = None
+    if logo is None:
+        return None
+
+    fw, fh = config.frame_width, config.frame_height
+    target_w = min(3.2, max(2.0, fw * 0.2))
+    logo.scale_to_fit_width(target_w)
+
+    margin = 0.3
+    bottom = -fh / 2 + margin                # literal bottom-right corner
+    x = fw / 2 - margin - logo.width / 2
+    y = bottom + logo.height / 2
+    logo.move_to([x, y, 0])
+    logo.set_z_index(-10)        # above the background (z=-20), below all content
+    try:
+        logo.set_opacity(0.9)
+    except Exception:
+        pass
+    logo._vgen_overlay = True
+    return logo
+
+
+def _add_brand_logo(scene):
+    if getattr(scene, "_vgen_logo", None) is not None:
+        return
+    logo = _make_brand_logo()
+    if logo is None:
+        return
+    scene._vgen_logo = logo
+    scene.add(logo)              # normal mobject; z_index keeps it behind content
+
+
+def _ensure_logo_present(scene):
+    """Re-add the logo if a scene cleared the canvas; z_index keeps it behind
+    content, so no need to reorder."""
+    logo = getattr(scene, "_vgen_logo", None)
+    if logo is None:
+        return
+    try:
+        if logo not in scene.mobjects:
+            scene.add(logo)
+    except Exception:
+        pass
+
+
 _orig_scene_render = Scene.render
 _orig_scene_play = Scene.play
 _orig_scene_wait = Scene.wait
 
 
 def _patched_scene_render(self, *args, **kwargs):
+    _add_brand_logo(self)
     result = _orig_scene_render(self, *args, **kwargs)
     check_layout(self)
     return result
@@ -544,6 +616,7 @@ def _patched_scene_render(self, *args, **kwargs):
 
 def _patched_scene_play(self, *animations, **kwargs):
     _autofit_scene(self, extra=_animation_mobjects(animations))
+    _ensure_logo_present(self)
     result = _orig_scene_play(self, *animations, **kwargs)
     _check_during_render(self)
     return result
@@ -551,6 +624,7 @@ def _patched_scene_play(self, *animations, **kwargs):
 
 def _patched_scene_wait(self, *args, **kwargs):
     _autofit_scene(self)
+    _ensure_logo_present(self)
     result = _orig_scene_wait(self, *args, **kwargs)
     _check_during_render(self)
     return result
