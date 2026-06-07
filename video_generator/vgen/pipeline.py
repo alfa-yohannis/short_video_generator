@@ -123,6 +123,15 @@ class VideoPipeline:
             merged = self.assembler.merge_subtitles(self.storyboard, self.output, lang)
             progress.log(f"  -> {merged}")
 
+    def stage_thumbnails(self) -> None:
+        # A poster frame per (language, orientation): the first scene's last second.
+        for lang in self.storyboard.languages:
+            for orient in self.storyboard.orientations:
+                thumb = self.assembler.thumbnail(self.storyboard, self.output, lang,
+                                                 orient, self.options.force)
+                if thumb:
+                    progress.log(f"  -> {thumb}")
+
     def stage_youtube(self) -> None:
         self.youtube.generate(self.storyboard, self.output, self.options.force)
 
@@ -132,14 +141,15 @@ class VideoPipeline:
         """Run the requested stage(s), each wrapped with a header + timing line."""
         stage = self.options.stage
         plan = [
-            ("scripts", "[1/8] write narration scripts (AI-generated when missing)", self.stage_scripts),
-            ("audio",   "[2/8] generate audio + per-scene SRTs", self.stage_audio),
-            ("scenes",  "[3/8] materialize scene .py files (AI-generated when missing)", self.stage_scenes),
-            ("render",  "[4/8] render Manim scenes", self.stage_render),
-            ("mux",     "[5/8] mux clips (video + audio)", self.stage_mux),
-            ("concat",  "[6/8] concat per-scene clips into final videos", self.stage_concat),
-            ("srt",     "[7/8] merge per-scene SRTs into final SRTs", self.stage_srt),
-            ("youtube", "[8/8] generate YouTube metadata (per language)", self.stage_youtube),
+            ("scripts", "[1/9] write narration scripts (AI-generated when missing)", self.stage_scripts),
+            ("audio",   "[2/9] generate audio + per-scene SRTs", self.stage_audio),
+            ("scenes",  "[3/9] materialize scene .py files (AI-generated when missing)", self.stage_scenes),
+            ("render",  "[4/9] render Manim scenes", self.stage_render),
+            ("mux",     "[5/9] mux clips (video + audio)", self.stage_mux),
+            ("concat",  "[6/9] concat per-scene clips into final videos", self.stage_concat),
+            ("thumbnails", "[7/9] thumbnails (first scene, last second)", self.stage_thumbnails),
+            ("srt",     "[8/9] merge per-scene SRTs into final SRTs", self.stage_srt),
+            ("youtube", "[9/9] generate YouTube metadata (per language)", self.stage_youtube),
         ]
         for name, label, runner in plan:
             if stage not in ("all", name):

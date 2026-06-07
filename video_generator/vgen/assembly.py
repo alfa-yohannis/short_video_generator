@@ -16,7 +16,7 @@ from __future__ import annotations
 import subprocess
 from datetime import timedelta
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from .media import ffprobe_duration, is_up_to_date
 from .models import Storyboard
@@ -78,6 +78,35 @@ class ClipAssembler:
             check=True,
         )
         return final_path
+
+    def thumbnail(self, storyboard: Storyboard, output: Path, lang: str, orient: str,
+                  force: bool = False) -> Optional[Path]:
+        """Save a poster frame for one (language, orientation): a still from the
+        last second of the FIRST scene's clip, at ``thumbnails/<lang>_<orient>.png``.
+
+        Uses the muxed per-scene clip (falls back to the raw render). Returns the
+        thumbnail path, or ``None`` if there's no scene/source to grab from.
+        """
+        if not storyboard.scenes:
+            return None
+        first = storyboard.scenes[0].basename
+        source = output / "clips" / lang / orient / f"{first}.mp4"
+        if not source.exists():
+            source = output / "video" / lang / orient / f"{first}.mp4"
+        if not source.exists():
+            return None
+        thumb_dir = output / "thumbnails"
+        thumb_dir.mkdir(parents=True, exist_ok=True)
+        thumb = thumb_dir / f"{lang}_{orient}.png"
+        if not force and is_up_to_date(thumb, source):
+            return thumb
+        # -sseof -1 seeks to one second before the end, then grab a single frame.
+        subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error", "-sseof", "-1", "-i", str(source),
+             "-frames:v", "1", "-update", "1", str(thumb)],
+            check=True,
+        )
+        return thumb
 
     def merge_subtitles(self, storyboard: Storyboard, output: Path, lang: str) -> Path:
         """Merge per-scene SRTs into one, offsetting each scene by the clip length."""

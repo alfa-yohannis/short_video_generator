@@ -510,6 +510,48 @@ def test_is_up_to_date(tmp_path):
     assert media.is_up_to_date(dest, tmp_path / "absent") is True  # missing src ignored
 
 
+def test_thumbnail_uses_first_scene_last_second(tmp_path, monkeypatch):
+    import vgen.assembly as assembly
+    sb = make_storyboard(scenes=[
+        Scene("introduction", "Introduction", "scene_introduction.py", 15, "d", {}),
+        Scene("the_problem", "TheProblem", "scene_the_problem.py", 20, "d", {}),
+    ])
+    clip = tmp_path / "clips" / "en" / "landscape" / "introduction.mp4"
+    clip.parent.mkdir(parents=True)
+    clip.write_bytes(b"x")
+
+    captured = {}
+    monkeypatch.setattr(assembly.subprocess, "run",
+                        lambda cmd, **kw: captured.setdefault("cmd", cmd))
+
+    out = assembly.ClipAssembler().thumbnail(sb, tmp_path, "en", "landscape", force=True)
+    assert out == tmp_path / "thumbnails" / "en_landscape.png"
+    assert str(clip) in captured["cmd"]            # the FIRST scene's clip, not another
+    assert "-sseof" in captured["cmd"] and "-1" in captured["cmd"]   # last-second seek
+
+
+def test_thumbnail_falls_back_to_raw_render(tmp_path, monkeypatch):
+    import vgen.assembly as assembly
+    sb = make_storyboard(scenes=[Scene("introduction", "Introduction",
+                                        "scene_introduction.py", 15, "d", {})])
+    video = tmp_path / "video" / "id" / "portrait" / "introduction.mp4"   # no clip, only render
+    video.parent.mkdir(parents=True)
+    video.write_bytes(b"x")
+    captured = {}
+    monkeypatch.setattr(assembly.subprocess, "run",
+                        lambda cmd, **kw: captured.setdefault("cmd", cmd))
+    out = assembly.ClipAssembler().thumbnail(sb, tmp_path, "id", "portrait", force=True)
+    assert out == tmp_path / "thumbnails" / "id_portrait.png"
+    assert str(video) in captured["cmd"]
+
+
+def test_thumbnail_none_when_no_source(tmp_path):
+    import vgen.assembly as assembly
+    sb = make_storyboard(scenes=[Scene("introduction", "Introduction",
+                                        "scene_introduction.py", 15, "d", {})])
+    assert assembly.ClipAssembler().thumbnail(sb, tmp_path, "en", "landscape") is None
+
+
 # --- Gemini HTTP parsing + quota classification ----------------------------
 
 

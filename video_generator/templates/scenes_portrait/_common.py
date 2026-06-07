@@ -536,9 +536,9 @@ def _autofit_scene(scene, extra=()):
 # A horizontal logo is pinned to the bottom-right of every scene: "Belajar"
 # (ayo-belajar-horizontal) for Indonesian, "Learn" (ayo-learn-horizontal) for
 # English. It's tagged ``_vgen_overlay`` so the layout self-check / auto-fit
-# never move or flag it. It's drawn BEHIND scene content (low z-index) so scene
-# objects are never covered by the logo. It sits at the literal bottom-right
-# corner; the play/wait hooks just re-add it if a scene clears the canvas.
+# never move or flag it. It's a small, semi-transparent BOTTOM-RIGHT watermark
+# drawn BEHIND scene content (low z-index) so objects render over it; the
+# play/wait hooks just re-add it if a scene clears the canvas.
 
 def _make_brand_logo():
     """Build the language-specific horizontal logo, placed bottom-right."""
@@ -562,17 +562,15 @@ def _make_brand_logo():
         return None
 
     fw, fh = config.frame_width, config.frame_height
-    target_w = min(3.2, max(2.0, fw * 0.2))
+    target_w = min(3.2, max(2.0, fw * 0.2))      # small (portrait)
     logo.scale_to_fit_width(target_w)
-
     margin = 0.3
-    bottom = -fh / 2 + margin                # literal bottom-right corner
     x = fw / 2 - margin - logo.width / 2
-    y = bottom + logo.height / 2
+    y = -fh / 2 + margin + logo.height / 2       # bottom-right corner
     logo.move_to([x, y, 0])
     logo.set_z_index(-10)        # above the background (z=-20), below all content
     try:
-        logo.set_opacity(0.9)
+        logo.set_opacity(0.5)    # semi-transparent
     except Exception:
         pass
     logo._vgen_overlay = True

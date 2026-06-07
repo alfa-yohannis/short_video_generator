@@ -180,13 +180,14 @@ After it finishes:
 ├── clips/{id,en}/{landscape,portrait}/<scene>.mp4
 ├── final/{id,en}/<title>_landscape.mp4
 ├── final/{id,en}/<title>_portrait.mp4
+├── thumbnails/{id,en}_{landscape,portrait}.png  ← poster: first scene, last second
 ├── subtitles/{id,en}/<title>.srt         ← merged with proper timestamps
 └── youtube/{id,en}/youtube.txt           ← title / description / keywords per language
 ```
 
 ---
 
-## How it works (the seven stages)
+## How it works (the stages)
 
 Run everything (default) or just one stage with `--stage`:
 
@@ -198,6 +199,7 @@ Run everything (default) or just one stage with `--stage`:
 | `render`  | Run Manim with `MANIM_LANG=<lang>` and `MANIM_AUDIO_DIR=<output>/audio` for each (lang, orientation) pair |
 | `mux`     | Combine raw video + MP3 into per-scene clips at 48 kHz stereo AAC |
 | `concat`  | Concat clips into `final/<lang>/<title>_<orient>.mp4` |
+| `thumbnails` | Save a poster frame per (lang, orientation) — the first scene's last second — to `thumbnails/<lang>_<orient>.png` |
 | `srt`     | Merge per-scene SRTs into `subtitles/<lang>/<title>.srt` with proper offsets |
 | `youtube` | Ask the AI CLI for YouTube title/description/keywords per language; write `youtube/<lang>/youtube.txt` |
 | `all`     | (default) all of the above, in order |

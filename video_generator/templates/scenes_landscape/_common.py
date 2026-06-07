@@ -524,13 +524,13 @@ def _autofit_scene(scene, extra=()):
         _fit_into_frame(m)
 
 
-# --- Brand logo overlay (bottom-right, per-language) ----------------------
-# A horizontal logo is pinned to the bottom-right of every scene: "Belajar"
-# (ayo-belajar-horizontal) for Indonesian, "Learn" (ayo-learn-horizontal) for
-# English. It's tagged ``_vgen_overlay`` so the layout self-check / auto-fit
-# never move or flag it. It's drawn BEHIND scene content (low z-index) so scene
-# objects are never covered by the logo; the play/wait hooks just re-add it if a
-# scene clears the canvas.
+# --- Brand logo watermark (bottom-right, per-language) --------------------
+# A small, semi-transparent horizontal logo sits at the BOTTOM-RIGHT of every
+# scene: "Belajar" (ayo-belajar-horizontal) for Indonesian, "Learn"
+# (ayo-learn-horizontal) for English. It's tagged ``_vgen_overlay`` so the
+# layout self-check / auto-fit never move or flag it, and drawn BEHIND scene
+# content (low z-index) so objects render over it; the play/wait hooks just
+# re-add it if a scene clears the canvas.
 
 def _make_brand_logo():
     """Build the language-specific horizontal logo, placed bottom-right."""
@@ -554,17 +554,15 @@ def _make_brand_logo():
         return None
 
     fw, fh = config.frame_width, config.frame_height
-    target_w = min(2.0, max(1.5, fw * 0.135))   # landscape: smaller
+    target_w = min(2.0, max(1.5, fw * 0.135))   # small (landscape)
     logo.scale_to_fit_width(target_w)
-
     margin = 0.3
-    bottom = -fh / 2 + margin                # literal bottom-right corner
     x = fw / 2 - margin - logo.width / 2
-    y = bottom + logo.height / 2
+    y = -fh / 2 + margin + logo.height / 2       # bottom-right corner
     logo.move_to([x, y, 0])
     logo.set_z_index(-10)        # above the background (z=-20), below all content
     try:
-        logo.set_opacity(0.9)
+        logo.set_opacity(0.5)    # semi-transparent
     except Exception:
         pass
     logo._vgen_overlay = True

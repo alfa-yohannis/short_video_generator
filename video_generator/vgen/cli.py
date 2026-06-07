@@ -23,7 +23,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", required=True, help="Output directory (all intermediates go here)")
     parser.add_argument(
         "--stage",
-        choices=["all", "scripts", "audio", "scenes", "render", "mux", "concat", "srt", "youtube"],
+        choices=["all", "scripts", "audio", "scenes", "render", "mux", "concat",
+                 "thumbnails", "srt", "youtube"],
         default="all", help="Run only one stage of the pipeline (default: all)",
     )
     parser.add_argument(
