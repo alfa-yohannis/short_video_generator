@@ -28,6 +28,7 @@ from .dependencies import DependencyChecker
 from .duration import DurationFitter
 from .models import Storyboard
 from .narration import NarrationWriter
+from .preparation import PreparationRunner, is_noop_preparation
 from .progress import progress
 from .refine import StoryboardRefiner
 from .renderer import ManimRenderer, SceneValidator
@@ -57,6 +58,8 @@ class BuildOptions:
     validate_scenes: bool = False     # render-check each scene right after generating it
     validate_attempts: int = 10       # how many times to refine a failing scene
     refine_storyboard: bool = False   # let the AI rewrite an over-dense storyboard first
+    run_preparation: bool = False     # execute the # Preparation block agentically (fetch assets)
+    mcp_config: Optional[Path] = None # .mcp.json for the preparation agent (default: repo root)
     skip_youtube: bool = False
     skip_dep_check: bool = False
     no_ai_cli_check: bool = False
@@ -256,7 +259,21 @@ def run_build(options: BuildOptions) -> None:
     output.mkdir(parents=True, exist_ok=True)
 
     _print_header(storyboard, output)
+    # Optional agentic pre-pass: actually carry out the # Preparation block (fetch
+    # reference assets). Runs AFTER the wipe so --force doesn't delete what it
+    # fetched, and BEFORE scene generation so the scenes can use the assets.
+    if options.run_preparation:
+        _run_preparation(storyboard, output, options)
     _run_with_splits(storyboard, output, options)
+
+
+def _run_preparation(storyboard: Storyboard, output: Path, options: BuildOptions) -> None:
+    """Execute the storyboard's # Preparation block agentically, recording any
+    fetched reference assets on the storyboard for scene generation to use."""
+    mcp_config = options.mcp_config or (config.REPO_ROOT / ".mcp.json")
+    client = create_ai_client(storyboard.ai_cli, options.effort)
+    runner = PreparationRunner(client, mcp_config)
+    storyboard.prep_assets_dir = runner.run(storyboard, output, options.force)
 
 
 def _run_with_splits(storyboard: Storyboard, output: Path, options: BuildOptions) -> None:
@@ -346,6 +363,9 @@ def _print_header(storyboard: Storyboard, output: Path) -> None:
     print(f"Orientations: {storyboard.orientations}")
     print(f"Scenes:       {len(storyboard.scenes)} -> "
           f"{', '.join(s.basename for s in storyboard.scenes)}")
+    if not is_noop_preparation(storyboard.preparation):
+        print(f"Preparation:  {len(storyboard.preparation)} chars "
+              "— applied as scene-generation context")
     print(f"TTS:          {storyboard.tts_provider} (voices: {storyboard.voices})")
     print(f"AI CLI:       {storyboard.ai_cli}")
     print(f"Scenes dirs:  landscape={storyboard.scenes_landscape_dir}, "

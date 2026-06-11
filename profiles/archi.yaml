@@ -1,0 +1,57 @@
+# Preparation profile: ArchiMate via the Archi MCP server.
+#
+# Selected by a storyboard's `preparation_profile: archi` front-matter, and used
+# only with `--run-preparation`. Drop a sibling `<name>.yaml` in this folder to
+# add another profile — no code change needed. The built-in `generic` profile
+# (no app launch, assets under assets/prep) is the default when none is named.
+
+name: archi
+assets_subdir: assets/archi      # fetched symbols land in <output>/assets/archi/
+mcp_server: archi                # which server in .mcp.json to bring up / wait for
+
+# How to start the MCP server when its port (from .mcp.json) is closed. Omit this
+# whole block for a profile whose server is always started by hand.
+launch:
+  command: /home/alfa/programs/Archi/Archi.sh   # supports ~ and $ENV expansion
+  requires_display: true         # it's a GUI app; skip the launch under headless/cron
+  timeout_seconds: 60            # how long to wait for the port after launching
+  poll_seconds: 2
+  enable_preference:             # set first so Archi auto-starts the server on launch
+    file: ~/.archi/.metadata/.plugins/org.eclipse.core.runtime/.settings/net.vheerden.archi.mcp.prefs
+    key: mcp.server.autoStart
+    value: "true"
+  # Open a fresh empty model on launch so a model is active before the agent
+  # connects — no GUI automation needed. Archi opens a file argument via its
+  # `--launcher.defaultAction openFile` setting. The template is copied to a scratch
+  # path first, so this repo copy stays pristine. Relative to this profiles/ dir.
+  open_file: model.archimate
+
+# Extra, topic-specific instructions injected into the preparation agent prompt.
+prompt_specialization: |
+  ENSURE A MODEL IS ACTIVE FIRST. The Archi MCP tools act only on the active model,
+  and the elements panel is inactive without one. A fresh empty model (named
+  "(new model)") is opened for you when Archi launches; the MCP server has NO
+  "create model" tool, so any model must come from the Archi GUI:
+  - VERIFY a model is active with the MCP model-info / session query tool. It should
+    be — use it. If none is active, create one (Ctrl+N in the GUI, e.g.
+    `xdotool search --name Archi windowactivate --sync key ctrl+n`) or open a recent
+    model (File menu -> Open Recent).
+  - OPEN / USE THE "Default View". The model already contains a view named
+    "Default View" in its Views folder; rendering and export work on a view, so
+    locate it with the MCP view tools (e.g. get-view, or list the model's views by
+    name). If the GUI editor must be open to render, open it: select "Default View"
+    in the model tree and press Ctrl+Shift+O (e.g. via xdotool).
+  - THEN, for each element type, capture its true symbol: create one element of that
+    type, add it to the Default View (add-to-view), and export the view/element to
+    an image with export-view (SVG, else PNG/JPG). TRIM the empty margin on all four
+    sides so the symbol fills the image with no surrounding whitespace: for a raster
+    run `convert <f> -trim +repage <f>` (ImageMagick); for an SVG crop to the
+    drawing's bounding box, e.g. `inkscape --export-area-drawing --export-plain-svg
+    -o <f> <f>`, or set its viewBox to the content bounds. Install the tool if it is
+    missing. It is a scratch model/view — clear or delete freely between exports.
+  - When the Archi route works, add the element's ArchiMate layer to its manifest
+    entry, e.g. {"type": "Stakeholder", "layer": "Motivation", "file": "stakeholder.svg"}.
+  - FINALLY, leave Archi clean for exit: DISCARD all your changes to the scratch
+    model (revert it; NEVER save — it is a throwaway copy) and close it, so exiting
+    Archi later raises no "Save changes?" prompt. If you cannot close it via the MCP
+    tools, close it in the GUI after reverting (File menu -> Close, or Ctrl+W).

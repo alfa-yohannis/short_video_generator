@@ -1,15 +1,22 @@
 #!/usr/bin/env python3
-"""Cron-driven design-pattern video factory.
+"""Cron-driven enterprise-architecture video factory.
+
+The ArchiMate / enterprise-architecture sibling of ``auto_generate_patterns.py``.
+It drives the same short-video generator, but its to-do list, storyboard naming,
+and the prompt it feeds the AI are all tuned for enterprise-architecture topics
+(ArchiMate layers, viewpoints, frameworks) rather than software design patterns.
 
 Each run (default mode):
 
-1. Reads ``design_patterns_todo.csv`` (no, name, category, status).
+1. Reads ``enterprise_architecture_todo.csv`` (no, name, category, status).
 2. If ``MAX_PARALLEL_BUILDS`` generator processes are already running, exits;
-   otherwise it starts one more (builds run in parallel).
-3. Picks the first pending (blank-status) pattern, marks it "in progress", and
-   saves the CSV.
+   otherwise it starts one more (builds run in parallel). NOTE: the running count
+   is taken over ``generate_video.py`` as a whole, so it is SHARED with the
+   patterns factory — together they will not exceed this cap.
+3. Picks the first pending (blank-status) topic, marks it "in progress", saves.
 4. Generates a storyboard for it under ``storyboards/`` using the Claude CLI at
    ``xhigh`` effort (skipped if a valid one already exists), validating it parses.
+   EA storyboards are named ``<slug>_storyboard.md`` (NO ``_pattern_`` infix).
 5. Launches the short-video generator in a SEPARATE console window so you can
    watch it, building into ``tmp/<slug>/`` with:
    ``--tts edge --ai-cli claude --effort xhigh --refine-storyboard
@@ -20,11 +27,11 @@ Each run (default mode):
 
 Helper modes:
     --finalize NO --exit-code N   (called by the spawned console)
+    --start NO                    (manually start a specific row now)
     --reset-stuck                 (clear any "in progress" rows back to pending)
     --status                      (print the to-do summary and exit)
 
-Run it by hand in a terminal to test, or wire it to cron (every 2 hours) — see the
-README banner printed by ``--help``.
+Run it by hand in a terminal to test, or wire it to cron (every 2 hours).
 """
 from __future__ import annotations
 
@@ -42,19 +49,20 @@ from typing import Dict, List, Optional
 
 # --- Layout (everything is derived from where this file lives) --------------
 REPO = Path(__file__).resolve().parent
-CSV_PATH = REPO / "design_patterns_todo.csv"
+CSV_PATH = REPO / "enterprise_architecture_todo.csv"
 STORYBOARDS = REPO / "storyboards"
 TMP = REPO / "tmp"
 VENV_PY = REPO / ".venv" / "bin" / "python"
 GENERATOR = REPO / "video_generator" / "generate_video.py"
-LOCK_PATH = TMP / ".auto_patterns.lock"
+LOCK_PATH = TMP / ".auto_ea.lock"
 
 STATUS_DONE = "done"
 STATUS_IN_PROGRESS = "in progress"
 FIELDNAMES = ["no", "name", "category", "status", "start_time", "end_time"]
 
-# How many builds may run at once. Each cron run starts one more pattern as long
-# as fewer than this many generator processes are actually running.
+# How many builds may run at once. Each cron run starts one more topic as long
+# as fewer than this many generator processes are actually running. The count is
+# shared with auto_generate_patterns.py (both run generate_video.py).
 MAX_PARALLEL_BUILDS = 2
 
 # Make the Claude / ffmpeg binaries findable even under cron's minimal PATH.
@@ -77,7 +85,7 @@ def log(msg: str) -> None:
 
 
 def slugify(name: str) -> str:
-    """'Abstract Factory' -> 'abstract_factory'; drops any '(...)' qualifier."""
+    """'ArchiMate Strategy Layer' -> 'archimate_strategy_layer'; drops '(...)'."""
     name = re.sub(r"\(.*?\)", " ", name)          # drop "(MVC)" etc.
     name = name.lower().replace("&", " and ")
     name = re.sub(r"[^a-z0-9]+", "_", name)
@@ -85,7 +93,8 @@ def slugify(name: str) -> str:
 
 
 def storyboard_path(name: str) -> Path:
-    return STORYBOARDS / f"{slugify(name)}_pattern_storyboard.md"
+    # EA storyboards have no "_pattern_" infix, e.g. archimate_strategy_layer_storyboard.md
+    return STORYBOARDS / f"{slugify(name)}_storyboard.md"
 
 
 def output_dir(name: str) -> Path:
@@ -152,80 +161,122 @@ def update_row(no: str, **fields: str) -> None:
 # --- Storyboard generation --------------------------------------------------
 # A compact reference in the SIMPLIFIED format (optional front-matter, plain `##`
 # scene headings with an inline `(~Ns)` duration, the description right under the
-# heading — no file names, class names, or `### description` blocks).
+# heading). This exemplar shows the ENTERPRISE-ARCHITECTURE house style: ArchiMate
+# notation rather than code, official layer colors, a teaching arc that locates the
+# topic, names its elements, joins them with relationships, ties them to the
+# Motivation goals, and demonstrates them on a small, familiar Indonesian example.
 _EXEMPLAR = """\
 ---
-title: strategy_pattern
+title: archimate_strategy_layer
 language: both
 length: 2-3 minutes
+preparation_profile: archi
 ---
 
-# Strategy Pattern
+# ArchiMate Strategy Layer
 
-A short tutorial on the Strategy pattern using a shipping-cost example: a Checkout
-that calculates shipping with interchangeable algorithms. Code in Java. Use
-DANGER for rigid conditionals, OK for the Strategy design, HIGHLIGHT for the
-current object, PRIMARY for titles, ACCENT for labels.
+A short tutorial on the Strategy Layer of the ArchiMate enterprise-architecture
+language. This is a modeling notation, not program code, so every scene is built
+from labelled ArchiMate elements and relationships. Use ArchiMate's official layer
+colors: Strategy orange, Motivation purple, Business yellow, Application cyan,
+Technology green. The running example is small and familiar in the Indonesian
+context: "Warung Bu Sari", a food stall that wants to grow by selling online. Use
+PRIMARY for titles, ACCENT for element-type and relationship labels, HIGHLIGHT for
+the current element, OK for a finished, coherent model.
 
 # Preparation
-No preparation is needed: this is a code-only tutorial, so every scene is written
-directly from the source examples and there are no external tools or reference
-assets to set up.
+Every scene must use the real, original ArchiMate element icons/symbols, never an
+invented shape. Obtain ONLY the symbols this video uses, not every layer: the
+Strategy elements it introduces (Resource, Capability, Course of Action, Value
+Stream), the relationships shown between them, and the few neighbouring elements
+it connects to (the Motivation Goal and the Application it realizes). Get each in
+this order of preference: first export it from the Archi modelling tool (the
+"archi" MCP server); if Archi does not provide it, find the official symbol online;
+only if neither is available, draw it yourself, preferring SVG and falling back to
+JPG when SVG is not possible. Keep each element's official shape, icon and color as
+the reference for the scenes below.
 
-## Introduction (~15s)
-Show "Strategy Pattern" as a LARGE CENTERED title, with a short subtitle directly
-beneath it. Explain it defines a family of algorithms, puts each in its own class,
-and makes them interchangeable. Three shipping icons labeled Standard, Express,
-Same-Day.
+## Where It Sits (~18s)
+Show "ArchiMate Strategy Layer" as a LARGE CENTERED title with a short subtitle
+beneath it. Draw ArchiMate's layered framework as colored bands: Strategy on top in
+orange, then Business in yellow, Application in cyan, Technology in green, with a
+purple Motivation column alongside. HIGHLIGHT the Strategy band and note it
+captures where the enterprise is headed.
 
-## The Problem (~25s)
-A Java Checkout class calculates shipping with hardcoded if/else branches for
-each shipping type. Show the class growing as rules are added; mark the rigid
-branches in DANGER. The pain: every new algorithm forces editing this class.
+## The Four Elements (~34s)
+Introduce the vocabulary, grouped by ArchiMate aspect, each ACCENT-labelled.
+Resource is the one active structure element, an asset drawn as a plain rectangle,
+such as "Akun Aplikasi Pesan-Antar". The other three are behavior elements drawn as
+rounded boxes: Capability, an ability such as "Penjualan Online"; Course of Action,
+a chosen plan such as "Mulai Jualan Online"; and Value Stream, a chevron of
+value-adding stages such as "Dari Pesan ke Antar". Show a Resource assigned to a
+Capability in OK.
 
-## The Strategy Solution (~30s)
-Define a ShippingStrategy interface with cost(Order). Show StandardShipping,
-ExpressShipping, SameDayShipping implementing it, and a Checkout that holds a
-ShippingStrategy and delegates with shippingStrategy.cost(order). Swap the
-strategy at runtime in OK color.
+## A Worked Example (~40s)
+Assemble one model top to bottom. A purple Motivation Goal "Naikkan Omzet" is
+realized by a Course of Action "Mulai Jualan Online", which draws on Capabilities
+"Penjualan Online" and "Pesan-Antar", each backed by an assigned Resource. A Value
+Stream "Dari Pesan ke Antar" is served by those capabilities, and "Penjualan
+Online" is realized by an "Aplikasi Pesan-Antar" application in the layer below.
+Build it up in OK with the active element in HIGHLIGHT.
 
-## Conclusion (~15s)
-Recap: encapsulate interchangeable algorithms behind one interface. Benefits:
-fewer conditionals, easier testing, runtime flexibility. End with
-Context -> Strategy -> ConcreteStrategy.
+## Conclusion (~28s)
+Recap: the Strategy layer answers what the enterprise wants to achieve and with
+what high-level means, using Resource, Capability, Course of Action, and Value
+Stream, tied upward to the Motivation layer's goals. End with the line of sight on
+screen: Resource -> Capability -> Course of Action -> Goal.
 """
 
 
 def _build_prompt(name: str, category: str) -> str:
-    title = f"{slugify(name)}_pattern"
+    title = slugify(name)
     return (
         "You are authoring a storyboard markdown file for an automated tutorial-"
         "video generator. Below is a COMPLETE example in the required format. "
         "Study its structure: a small YAML front-matter block, a `# Title` "
         "heading, a free-form brief, then one plain `## Scene Title (~Ns)` heading "
         "per scene with the scene's visual description written directly under it.\n\n"
-        f"Produce a NEW storyboard for the **{name}** ({category}) software design "
-        "pattern, in the SAME format and the same level of detail.\n\n"
+        f"Produce a NEW storyboard explaining **{name}** (category: {category}) from "
+        "the field of enterprise architecture, modelled with the ArchiMate language, "
+        "in the SAME format and the same level of detail.\n\n"
         "Hard requirements:\n"
         f"- front-matter has exactly: `title: {title}`, `language: both`, "
-        "`length: 2-3 minutes`.\n"
-        f"- the `# ` title heading reads exactly `# {name} Pattern`.\n"
+        "`length: 2-3 minutes`, `preparation_profile: archi`.\n"
+        f"- the `# ` title heading reads exactly `# {name}`.\n"
         "- after the brief, include exactly one `# Preparation` section (a level-1 "
-        "heading, NOT a `## ` scene) stating that no preparation is needed because "
-        "this is a code-only tutorial with no external tools or reference assets to "
-        "set up. It has NO `(~Ns)` duration and is not counted as a scene.\n"
+        "heading, NOT a `## ` scene) directing the author to draw the real, "
+        "original ArchiMate element icons/symbols (never invented shapes). It must "
+        "say to obtain ONLY the symbols THIS video uses (the elements/relationships "
+        "its scenes name, including any specific neighbouring-layer elements), NOT "
+        "every layer. Source each in this order of preference: (1) export it from "
+        "Archi (the 'archi' MCP server in .mcp.json); (2) otherwise find the "
+        "official symbol online; (3) only if neither works, draw it yourself, "
+        "preferring SVG and falling back to JPG. This section has NO `(~Ns)` "
+        "duration and is not counted as a scene.\n"
         "- 6 to 8 scenes; each is a plain `## Human Title (~Ns)` heading (the "
         "`(~Ns)` is that scene's length in seconds) with the description right "
         "underneath. Do NOT write `## Scene:`, `**file:**`, `**fallback_duration:**`, "
         "`**class:**`, or `### description` — those are derived automatically.\n"
         "- the per-scene seconds must sum to between 120 and 180.\n"
-        f"- the FIRST (intro) scene must present the pattern name as the LARGE "
+        f"- the FIRST (intro) scene must present the topic name as the LARGE "
         f"CENTERED title (not only in the small top bar) — it reads exactly "
-        f"`{name} Pattern` (for a SOLID principle, drop the word Pattern). A short "
-        "subtitle may sit directly beneath it.\n"
-        "- write ONE concrete running example in **Java**; flow problem -> naive "
-        "approach -> the pattern -> a class/structure diagram -> before/after code "
-        "-> conclusion, adapted to this pattern.\n"
+        f"`{name}`. A short subtitle may sit directly beneath it.\n"
+        "- this is an ENTERPRISE-ARCHITECTURE MODELING tutorial, NOT program code: "
+        "build every scene from labelled ArchiMate boxes and relationships, never "
+        "source code. Use ArchiMate's official layer colors so the model reads as "
+        "authentic — Strategy orange, Business yellow, Application cyan, Technology "
+        "green, Motivation purple, Implementation and Migration pink.\n"
+        "- follow the teaching arc for a modeling topic: locate it in the ArchiMate "
+        "framework -> its purpose -> its vocabulary/elements, each with a short "
+        "example -> the relationships that join them -> how it connects to the "
+        "neighbouring layers (especially the Motivation layer's goals where "
+        "relevant) -> ONE worked model that demonstrates the elements in a concrete "
+        "case -> a conclusion.\n"
+        "- use ONE concrete running example that is simple and familiar in the "
+        "INDONESIAN context (for example a warung, a UMKM, or an ojek-online "
+        "service). Name the example's own elements in Indonesian, but keep the "
+        "ArchiMate element-type words in English (Resource, Capability, Goal, "
+        "Business Process, Application Component, and so on).\n"
         "- descriptions ONLY (no narration text, no Manim/Python code blocks). "
         "Use semantic colors DANGER/OK/HIGHLIGHT/PRIMARY/ACCENT as the example does.\n"
         "- avoid orientation words (left/right/above/below) in any text meant to "
@@ -314,7 +365,7 @@ def _write_runner(no: str, name: str, sb: Path, out: Path) -> Path:
         '  --ai-cli claude --effort xhigh \\\n'
         '  --refine-storyboard \\\n'
         '  --validate-scenes \\\n'
-        f'  --force; }} 2>&1 | tee "{logfile}"\n'
+        f'  }} 2>&1 | tee "{logfile}"\n'
         'code=${PIPESTATUS[0]}\n'
         f'if [ "$code" = "0" ]; then printf "\\033]0;✓ {name}\\007"; '
         f'else printf "\\033]0;✗ {name}\\007"; fi\n'
@@ -389,7 +440,7 @@ def mode_pick() -> None:
         rows = read_rows()
         pending = [r for r in rows if r["status"].lower() not in (STATUS_DONE, STATUS_IN_PROGRESS)]
         if not pending:
-            log("nothing pending — all patterns are done or in progress.")
+            log("nothing pending — all topics are done or in progress.")
             return
         row = pending[0]
         log(f"picked #{row['no']} {row['name']} ({row['category']}); "
@@ -416,7 +467,7 @@ def _build_and_launch(row: Dict[str, str]) -> None:
 
 def mode_start(no: str) -> None:
     """Manually start a specific row NOW, regardless of the first-pending order
-    and the one-at-a-time guard (use to jump ahead or re-run a pattern)."""
+    and the one-at-a-time guard (use to jump ahead or re-run a topic)."""
     if not CSV_PATH.exists():
         raise SystemExit(f"CSV not found: {CSV_PATH}")
     with _Lock(LOCK_PATH):
@@ -469,7 +520,7 @@ def mode_status() -> None:
         times = ""
         if r["start_time"] or r["end_time"]:
             times = f"  {r['start_time'] or '—':<19} -> {r['end_time'] or '—':<19}"
-        print(f"  [{mark}] {r['no']:>3}  {r['name']:<32} {r['category']:<22} {r['status']:<12}{times}")
+        print(f"  [{mark}] {r['no']:>3}  {r['name']:<44} {r['category']:<22} {r['status']:<12}{times}")
     print(f"\n  {done} done · {prog} in progress · {pend} pending · {len(rows)} total")
 
 

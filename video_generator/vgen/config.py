@@ -103,6 +103,16 @@ DENSITY_MIN_SCALE = 0.60
 MAX_SPLIT_ROUNDS = 2
 MIN_CHILD_DURATION_SECONDS = 7.0
 
+# --- Preparation step ------------------------------------------------------
+# How long the agentic ``--run-preparation`` pass (fetch reference symbols via a
+# profile's MCP server) may run before it is killed and the build falls back to
+# Manim primitives.
+PREPARATION_TIMEOUT_SECONDS = 900.0
+
+# Preparation profiles live as YAML files here (repo-root ``profiles/``); the
+# storyboard's ``preparation_profile:`` key selects one. See vgen/preparation.py.
+PROFILES_DIR = REPO_ROOT / "profiles"
+
 # --- YouTube field limits --------------------------------------------------
 YT_TITLE_MAX = 100
 YT_DESC_MAX = 5000

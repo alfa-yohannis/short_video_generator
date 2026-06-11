@@ -23,9 +23,11 @@ from . import config
 from .ai_client import AiClient
 from .density import SceneTooDenseError, is_too_dense
 from .models import Scene, Storyboard
+from .preparation import is_noop_preparation, load_manifest
 from .progress import progress
 from .text_utils import (
     escape_unsafe_ampersands,
+    python_syntax_error,
     strip_code_fences,
     validate_python_source,
 )
@@ -46,10 +48,14 @@ class SceneSynthesizer:
 
     def __init__(self, ai_client: AiClient,
                  validator: "Optional[SceneValidator]" = None,
-                 validate_attempts: int = 0) -> None:
+                 validate_attempts: int = 0,
+                 generate_attempts: int = 3) -> None:
         self.ai = ai_client
         self.validator = validator
         self.validate_attempts = validate_attempts
+        # How many times to re-ask the AI when its reply is empty or not valid
+        # Python (a syntax error is fed back so the next try can fix it).
+        self.generate_attempts = max(1, generate_attempts)
 
     # --- template materialization -----------------------------------------
 
@@ -119,17 +125,48 @@ class SceneSynthesizer:
 
     def _generate_one(self, storyboard: Storyboard, output: Path, scene: Scene,
                       orient: str, scene_path: Path, skeleton: str, common_src: str) -> None:
-        progress.log(f"  ai-generate {orient}/{scene.file} via {self.ai.name}…")
+        symbols = load_manifest(Path(storyboard.prep_assets_dir)) if storyboard.prep_assets_dir else []
+        if symbols:
+            prep_note = f" (+ {len(symbols)} reference assets)"
+        elif not is_noop_preparation(storyboard.preparation):
+            prep_note = " (+ # Preparation context)"
+        else:
+            prep_note = ""
+        progress.log(f"  ai-generate {orient}/{scene.file} via {self.ai.name}{prep_note}…")
         started = time.monotonic()
         prompt = self.build_prompt(storyboard, scene, orient, skeleton, common_src)
-        source = strip_code_fences(self.ai.generate(prompt))
-        if not source.strip():
-            raise SystemExit(f"AI returned empty source for {scene_path}")
-        source = escape_unsafe_ampersands(source)
-        validate_python_source(scene_path, source)
+        source = self._generate_valid_source(prompt, scene_path, orient)
         scene_path.write_text(source.rstrip() + "\n", encoding="utf-8")
         progress.log(f"    ↳ {orient}/{scene.file} in {time.monotonic() - started:.1f}s")
         self._validate_and_fix(storyboard, output, scene, orient, scene_path)
+
+    def _generate_valid_source(self, base_prompt: str, scene_path: Path, orient: str) -> str:
+        """Ask the AI for a scene file, retrying when the reply is empty or not
+        valid Python. The syntax error is fed back so the next attempt can fix it,
+        mirroring the render/layout repair loop (which only runs after this)."""
+        prompt, problem = base_prompt, ""
+        for attempt in range(1, self.generate_attempts + 1):
+            source = escape_unsafe_ampersands(strip_code_fences(self.ai.generate(prompt)))
+            if not source.strip():
+                problem = "the reply was empty"
+            else:
+                err = python_syntax_error(source, scene_path)
+                if err is None:
+                    return source
+                problem = f"not valid Python ({err})"
+            if attempt < self.generate_attempts:
+                progress.log(f"    {orient}/{scene_path.name}: {problem}; regenerating "
+                             f"(attempt {attempt}/{self.generate_attempts})…")
+                prompt = (
+                    f"{base_prompt}\n\nYOUR PREVIOUS OUTPUT WAS REJECTED — {problem}. "
+                    "Return ONLY a corrected, COMPLETE, valid Python file: no markdown "
+                    "fences, no commentary, no stray characters."
+                )
+        raise SystemExit(
+            f"AI could not produce valid Python for {scene_path} after "
+            f"{self.generate_attempts} attempt(s): {problem}.\n"
+            "Re-run with --force, or delete the file and re-run --stage scenes."
+        )
 
     def _validate_and_fix(self, storyboard: Storyboard, output: Path, scene: Scene,
                           orient: str, scene_path: Path) -> None:
@@ -194,10 +231,48 @@ class SceneSynthesizer:
 
     # --- prompts -----------------------------------------------------------
 
+    @staticmethod
+    def _assets_note(storyboard: Storyboard) -> str:
+        """List any preparation-fetched reference assets for the scene prompt.
+
+        Empty unless ``--run-preparation`` saved assets and wrote a manifest. Each
+        line gives the asset's type and the absolute file path so the generated
+        scene can load the real artwork via ``SVGMobject(path)`` /
+        ``ImageMobject(path)`` instead of inventing a shape."""
+        assets_dir = storyboard.prep_assets_dir
+        if not assets_dir:
+            return ""
+        symbols = load_manifest(Path(assets_dir))
+        if not symbols:
+            return ""
+        lines = []
+        for s in symbols:
+            path = (Path(assets_dir) / s["file"]).resolve()
+            layer = f" [{s['layer']}]" if s.get("layer") else ""
+            lines.append(f"  - {s['type']}{layer}: {path}")
+        listing = "\n".join(lines)
+        return (
+            "\nREFERENCE ASSETS (real artwork fetched for this build — PREFER these "
+            "over invented shapes). Load the matching file with `SVGMobject"
+            "(\"<path>\")` for .svg or `ImageMobject(\"<path>\")` for .jpg/.png, size "
+            "it to fit, and label it; only fall back to a primitive when no asset "
+            "below matches:\n"
+            f"{listing}\n"
+        )
+
     def build_prompt(self, storyboard: Storyboard, scene: Scene, orient: str,
                      skeleton: str, common_src: str) -> str:
         """The prompt that asks the AI to write one Manim scene file."""
         other_orient = "portrait" if orient == "landscape" else "landscape"
+        prep_note = ""
+        if not is_noop_preparation(storyboard.preparation):
+            prep_note = (
+                "\nPREPARATION (project-level reference material gathered before "
+                "authoring; treat as authoritative context for how things should "
+                "look — do NOT re-run any setup steps it mentions):\n"
+                f"{storyboard.preparation.strip()}\n"
+            )
+        assets_note = self._assets_note(storyboard)
         portrait_note = ""
         if orient == "portrait":
             portrait_note = (
@@ -212,7 +287,7 @@ class SceneSynthesizer:
 PROJECT TITLE: {storyboard.title}
 PROJECT BRIEF:
 {storyboard.project_brief}
-
+{prep_note}{assets_note}
 SCENE BASENAME: {scene.basename}
 SCENE CLASS:    {scene.classname}
 ORIENTATION:    {orient} (a parallel file will exist for {other_orient})

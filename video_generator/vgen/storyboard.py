@@ -111,6 +111,12 @@ class StoryboardParser:
     # a plain `## Human Title`. `###` subsections never match (no space after ##).
     _SCENE_HEADING_RE = re.compile(r"^##[ \t]+(.+?)\s*$", re.M)
     _H1_RE = re.compile(r"^#[ \t]+(.+?)\s*$", re.M)
+    # A dedicated `# Preparation` block (setup/reference notes) that sits between
+    # the project brief and the first `## ` scene. It is NOT a scene; the parser
+    # lifts it out into Storyboard.preparation and feeds it to scene generation.
+    _PREPARATION_HEADING_RE = re.compile(
+        r"^#[ \t]+preparation[ \t]*(?::|\(.*\))?[ \t]*$", re.I | re.M
+    )
     _HEADING_DURATION_RE = re.compile(r"\(([^()]*)\)\s*$")
     _SUBSECTION_RE = re.compile(r"^###\s+(.+?)\s*$", re.M)
     _FILE_META_RE = re.compile(r"\*\*file:\*\*\s*([^\s]+)", re.I)
@@ -236,7 +242,10 @@ class StoryboardParser:
                 "Storyboard must contain at least one '## ' scene heading."
             )
         brief_region = body[: scene_starts[0].start()]
-        project_brief, h1_title = self._split_off_title(brief_region)
+        # Pull the preparation block out FIRST so its `# Preparation` heading can
+        # never be mistaken for the document's title H1.
+        pre_prep, preparation = self._split_off_preparation(brief_region)
+        project_brief, h1_title = self._split_off_title(pre_prep)
         scenes: List[Scene] = []
         for i, match in enumerate(scene_starts):
             start = match.end()
@@ -265,11 +274,28 @@ class StoryboardParser:
             scenes_portrait_dir=(base / raw_portrait).resolve() if raw_portrait else None,
             scenes=scenes,
             project_brief=project_brief,
+            preparation=preparation,
+            preparation_profile=str(cfg.get("preparation_profile") or "generic"),
             min_duration=min_duration,
             max_duration=max_duration,
         )
 
     # --- front-matter readers (each accepts a friendly alias) --------------
+
+    @classmethod
+    def _split_off_preparation(cls, brief_region: str) -> Tuple[str, str]:
+        """Split the brief region at a ``# Preparation`` heading.
+
+        Returns ``(text_before_preparation, preparation_body)``. Everything from
+        the heading to the start of the first scene becomes the preparation body
+        (the heading line itself is dropped); the text before it is handed on for
+        normal title/brief extraction. No heading -> ``(brief_region, "")``."""
+        m = cls._PREPARATION_HEADING_RE.search(brief_region)
+        if not m:
+            return brief_region, ""
+        before = brief_region[: m.start()]
+        preparation = brief_region[m.end():].strip()
+        return before, preparation
 
     @classmethod
     def _split_off_title(cls, brief_region: str) -> Tuple[str, Optional[str]]:

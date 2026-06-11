@@ -245,6 +245,82 @@ name, fps, and resolution. The per-scene `(~Ns)` hint sets that scene's length
 the file name, or `title:`). Secrets are **never** read from the storyboard —
 the Gemini key comes from `--gemini-api-key`, `$GEMINI_API_KEY`, or `.env`.
 
+### Preparation block (optional)
+
+A single `# Preparation` section may sit between the project brief and the first
+`##` scene. It is a level-1 heading (`#`), **not** a scene: it has no `(~Ns)`
+duration, is never rendered, and never counts toward the duration budget. Use it
+to record one-time setup or reference-gathering the author should do *before*
+drawing the scenes.
+
+It works in two modes:
+
+- **Context only (default).** The block's text is passed to the scene generator
+  as authoritative context (so the visuals match the real notation), but no step
+  in it is executed.
+- **Executed (`--run-preparation`).** Before generating scenes, the block is run
+  **agentically** — the AI CLI is launched with tools on and the MCP servers from
+  `--mcp-config` (default: the repo-root `.mcp.json`) attached, so it actually
+  carries the block out. What "carrying it out" means is set by a **preparation
+  profile** (see below). Either way the agent saves files + a `manifest.json` under
+  `<output>/assets/…`, and each generated scene is told their paths so it loads the
+  **real artwork** via `SVGMobject(...)` / `ImageMobject(...)` instead of inventing
+  shapes. Best-effort: if nothing usable is produced it logs a warning and the
+  build falls back to Manim primitives. You'll see `[prep] …` lines while it runs
+  and a `(+ N reference assets)` suffix on each `ai-generate …` line afterward.
+
+#### Preparation profiles (`profiles/<name>.yaml`)
+
+The executed behavior is a **profile**, chosen by the storyboard's
+`preparation_profile:` front-matter key (default `generic`). Profiles are plain
+YAML files in the repo-root [`profiles/`](profiles/) directory — **drop a
+`profiles/<name>.yaml` in to add one, no code change.** A profile may declare:
+
+| Field | Purpose |
+|---|---|
+| `assets_subdir` | Where under `<output>/` to save fetched files (e.g. `assets/archi`) |
+| `mcp_server` + `launch` | An MCP server to ensure is up, and how to launch the app that serves it (with an optional preference to set first) |
+| `prompt_specialization` | Extra, topic-specific instructions for the agent |
+| `extra_tools` | Tool allowances beyond the base file/web set |
+
+- **`generic`** (built-in default) — just runs the block agentically with the
+  general file/web tools (plus every MCP server in `.mcp.json`) and saves whatever
+  it produces under `assets/prep/`. Launches no app.
+- **`archi`** ([`profiles/archi.yaml`](profiles/archi.yaml)) — connects to the
+  **Archi MCP server**, working in an empty scratch model (the elements panel and
+  render/export tools only work with a model open), then creates one element of
+  each type and exports its symbol. **Archi is started for you**: if the MCP port
+  is down, the profile sets the van Heerden plugin's *Auto-start on launch*
+  preference and launches `Archi.sh` **with a fresh model file**
+  ([`profiles/model.archimate`](profiles/model.archimate), copied to a scratch path
+  so the repo copy stays pristine) via Archi's `openFile` launcher action — so a
+  model is active the moment the server comes up, no GUI automation needed. Then it
+  waits up to 60s for the port. Needs a graphical display — under headless/cron (no
+  `DISPLAY`) start Archi yourself.
+
+```markdown
+# My Topic
+
+A free-form project brief.
+
+# Preparation
+Before drawing any scene, gather the authentic notation instead of inventing it:
+start the modelling tool, then collect each element's official symbol to use as
+the visual reference.
+
+## Introduction (~15s)
+...
+```
+
+The enterprise-architecture generator (`auto_generate_ea.py`) emits a Preparation
+block requiring the **real, original ArchiMate element icons/symbols** (never
+invented shapes), sourced in order of preference: export them from
+[Archi](https://www.archimatetool.com/)'s MCP server (the `archi` endpoint in
+`.mcp.json`); else find the official symbol online; else draw it by hand,
+preferring SVG and falling back to JPG. The software-pattern generator
+(`auto_generate_patterns.py`) emits one that simply states no preparation is
+needed (those tutorials are code-only).
+
 ### Legacy format (still fully supported)
 
 The earlier, more explicit form keeps working unchanged — required front-matter,
@@ -367,6 +443,8 @@ python3 video_generator/generate_video.py --storyboard SB.md --output OUT --forc
 | `--validate-scenes` | off | After generating each scene, render-check it (strict) and auto-refine it until it passes, *before* the real render |
 | `--validate-attempts N` | `10` | With `--validate-scenes`, max refine attempts per failing scene before giving up |
 | `--refine-storyboard` | off | Before building, let the AI rewrite an over-dense storyboard (trim/split/rebalance within the duration cap). Written to `<output>/storyboard.refined.md` — your original is untouched; if the plan changes, everything regenerates |
+| `--run-preparation` | off | Execute the storyboard's `# Preparation` block agentically before generating scenes (tools on + MCP), per its `preparation_profile:` (a `profiles/<name>.yaml`; default `generic`). The `archi` profile fetches ArchiMate symbols into `<output>/assets/archi/`, auto-launching Archi if its port is down. Best-effort; falls back to primitives. See [Preparation block](#preparation-block-optional) |
+| `--mcp-config PATH` | *(repo `.mcp.json`)* | `.mcp.json` the `--run-preparation` agent loads its MCP servers from |
 | `--skip-youtube` | off | Don't generate `youtube/<lang>/youtube.txt` |
 | `--skip-dep-check` | off | Skip the startup dependency validation |
 | `--no-ai-cli-check` | off | Don't enforce AI CLI presence (every narration / scene `.py` pre-filled) |
@@ -386,9 +464,18 @@ non-interactive `-p / --print` mode and pipes the prompt on stdin:
 - **Narration prompt** — receives the project brief, scene description, fallback
   duration, and (if available) the narration in the other language. Returns plain
   narration text in the requested language.
-- **Scene prompt** — receives the project brief, scene description, narration in
-  both languages, the verbatim `_common.py`, and the `scene_skeleton.py`
-  reference. Returns a complete Manim scene file.
+- **Scene prompt** — receives the project brief, the `# Preparation` block (when
+  present), any preparation-fetched reference symbols (with `--run-preparation`),
+  the scene description, narration in both languages, the verbatim `_common.py`,
+  and the `scene_skeleton.py` reference. Returns a complete Manim scene file.
+
+These two run with **tools disabled** (`--tools ""`) so the CLI returns the file
+text on stdout instead of acting like an agent. The one exception is the
+**preparation pass** (`--run-preparation`): it runs the CLI *agentically* (tools
+on, `--mcp-config` attached, `--allowedTools` pre-approving Bash/Read/Write/web +
+`mcp__archi__*`) so the model can drive the Archi MCP server and write the fetched
+symbol files itself. Its return text is just a summary — the real product is the
+files it writes under `<output>/assets/archi/`.
 
 Each AI-generated scene file is post-processed before it's written:
 

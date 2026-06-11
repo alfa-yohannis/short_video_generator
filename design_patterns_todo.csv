@@ -9,9 +9,9 @@ no,name,category,status,start_time,end_time
 8,Builder,GoF Creational,done,2026-06-10 02:00:01,2026-06-10 04:09:20
 9,Prototype,GoF Creational,done,2026-06-10 04:00:01,2026-06-10 06:11:19
 10,Singleton,GoF Creational,done,,
-11,Adapter,GoF Structural,,,
-12,Bridge,GoF Structural,,,
-13,Composite,GoF Structural,,,
+11,Adapter,GoF Structural,done,2026-06-11 01:00:01,2026-06-11 02:06:54
+12,Bridge,GoF Structural,done,2026-06-11 03:00:01,2026-06-11 04:21:53
+13,Composite,GoF Structural,done,2026-06-11 05:00:01,2026-06-11 06:17:01
 14,Decorator,GoF Structural,,,
 15,Facade,GoF Structural,,,
 16,Flyweight,GoF Structural,,,

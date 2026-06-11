@@ -131,6 +131,11 @@ _EDGE_TRANSIENT = (
     "TimeoutError", "Connection reset", "ServerDisconnected", "Temporary failure",
 )
 
+# A known, *transient* edge-tts flake: the Edge service occasionally returns an
+# empty stream for a perfectly valid request. It almost always succeeds on a
+# retry, so treat it as retryable (not a hard error).
+_EDGE_NO_AUDIO = ("No audio was received", "NoAudioReceived")
+
 
 class EdgeTtsEngine(TtsEngine):
     """Microsoft Edge online voices, via the ``edge-tts`` command-line tool."""
@@ -163,18 +168,25 @@ class EdgeTtsEngine(TtsEngine):
             mp3.unlink(missing_ok=True)   # drop any partial output before retry
             srt.unlink(missing_ok=True)
             err = (proc.stderr or proc.stdout or "").strip()
-            transient = any(s in err for s in _EDGE_TRANSIENT)
-            if attempt >= attempts or not transient:
-                hint = ("\nThis looks like a network problem reaching Edge TTS "
-                        "(speech.platform.bing.com). Check connectivity and re-run "
-                        "— already-generated audio is cached, so it resumes."
-                        if transient else "")
+            network = any(s in err for s in _EDGE_TRANSIENT)
+            no_audio = any(s in err for s in _EDGE_NO_AUDIO)
+            if attempt >= attempts or not (network or no_audio):
+                hint = ""
+                if network:
+                    hint = ("\nThis looks like a network problem reaching Edge TTS "
+                            "(speech.platform.bing.com). Check connectivity and re-run "
+                            "— already-generated audio is cached, so it resumes.")
+                elif no_audio:
+                    hint = ("\nEdge TTS returned no audio for this clip (a transient "
+                            "service flake); it usually succeeds on a re-run — "
+                            "already-generated audio is cached, so it resumes.")
                 raise SystemExit(
                     f"edge-tts failed for {mp3.name} after {attempt} attempt(s): "
                     f"{err[-200:]}{hint}"
                 )
+            reason = "returned no audio" if no_audio else "network error"
             delay = wait * (2 ** (attempt - 1))
-            progress.log(f"    edge-tts network error, retry {attempt}/{attempts} "
+            progress.log(f"    edge-tts {reason}, retry {attempt}/{attempts} "
                          f"(waiting {delay:.0f}s)…")
             time.sleep(delay)
 

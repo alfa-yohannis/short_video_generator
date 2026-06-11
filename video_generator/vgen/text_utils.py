@@ -11,6 +11,7 @@ from __future__ import annotations
 import ast
 import re
 from pathlib import Path
+from typing import Optional
 
 
 def camel_from_snake(name: str) -> str:
@@ -102,18 +103,27 @@ def escape_unsafe_ampersands(src: str) -> str:
     return _STRING_LITERAL_RE.sub(fix, src)
 
 
+def python_syntax_error(src: str, path: Path) -> Optional[str]:
+    """Return a short ``"line L col C: msg"`` if ``src`` isn't valid Python, else
+    ``None``. The non-raising counterpart of :func:`validate_python_source`, so a
+    caller can *retry* generation instead of aborting."""
+    try:
+        ast.parse(src, filename=str(path))
+        return None
+    except SyntaxError as exc:
+        return f"line {exc.lineno} col {exc.offset}: {exc.msg}"
+
+
 def validate_python_source(path: Path, src: str) -> None:
     """Raise ``SystemExit`` with a clear message if ``src`` isn't valid Python.
 
     Catching a syntax error here (at generation time) is far friendlier than
     letting it blow up later, mid-render.
     """
-    try:
-        ast.parse(src, filename=str(path))
-    except SyntaxError as exc:
+    err = python_syntax_error(src, path)
+    if err:
         raise SystemExit(
-            f"AI-generated scene at {path} is not valid Python: "
-            f"line {exc.lineno} col {exc.offset}: {exc.msg}\n"
+            f"AI-generated scene at {path} is not valid Python: {err}\n"
             "Re-run with --force after editing the file, or delete it and "
             "re-run --stage scenes to regenerate."
-        ) from exc
+        )

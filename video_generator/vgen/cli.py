@@ -98,6 +98,22 @@ def build_parser() -> argparse.ArgumentParser:
              "regenerated from scratch. The revision is saved to "
              "<output>/storyboard.refined.md (your original file is untouched).",
     )
+    parser.add_argument(
+        "--run-preparation", action="store_true",
+        help="Before generating scenes, run the storyboard's `# Preparation` block "
+             "AGENTICALLY (tools on, with the MCP servers in --mcp-config) so the AI "
+             "actually fetches the reference assets it describes. The behavior is set "
+             "by the storyboard's `preparation_profile:` (a profiles/<name>.yaml; "
+             "default 'generic'); the 'archi' profile launches Archi and exports "
+             "ArchiMate symbols into <output>/assets/archi/. Best-effort: falls back "
+             "to Manim primitives if it can't. Without this flag the block is "
+             "context-only (no execution).",
+    )
+    parser.add_argument(
+        "--mcp-config", default=None,
+        help="Path to the .mcp.json the preparation agent loads (default: the repo "
+             "root .mcp.json). Only used with --run-preparation.",
+    )
     parser.add_argument("--skip-youtube", action="store_true",
                         help="Don't generate youtube/<lang>/youtube.txt")
     parser.add_argument("--skip-dep-check", action="store_true",
@@ -126,6 +142,8 @@ def options_from_args(args: argparse.Namespace) -> BuildOptions:
         validate_scenes=args.validate_scenes,
         validate_attempts=args.validate_attempts,
         refine_storyboard=args.refine_storyboard,
+        run_preparation=args.run_preparation,
+        mcp_config=Path(args.mcp_config) if args.mcp_config else None,
         skip_youtube=args.skip_youtube,
         skip_dep_check=args.skip_dep_check,
         no_ai_cli_check=args.no_ai_cli_check,

@@ -19,6 +19,7 @@ choice behind a single function.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -27,6 +28,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from . import config
+from .progress import progress
 
 
 class AiClient(ABC):
@@ -110,6 +112,107 @@ class ClaudeClient(AiClient):
             "--disable-slash-commands",
         ]
         return self._run(command, prompt)
+
+    # --- agentic mode (tools ENABLED) -------------------------------------
+    #
+    # generate() above deliberately disables tools so the reply is plain text.
+    # run_agent() is the opposite: a print-mode run that KEEPS tools on so the
+    # model can drive an MCP server and write files itself (used by the
+    # preparation step to fetch reference assets). Its return value is the final
+    # text result; the real product is the side effects (files it wrote).
+
+    def run_agent(self, prompt: str, *, mcp_config: "Optional[Path]" = None,
+                  allowed_tools: "Optional[List[str]]" = None,
+                  add_dirs: "Optional[List[Path]]" = None,
+                  cwd: "Optional[Path]" = None,
+                  timeout: "Optional[float]" = None) -> str:
+        """Run ``claude`` agentically (tools on) and stream its progress.
+
+        ``mcp_config`` points at an ``.mcp.json`` so the agent can call that
+        server's tools; ``allowed_tools`` pre-approves tools (e.g.
+        ``["Bash", "Write", "mcp__archi__*"]``) so nothing blocks on a prompt.
+        Returns the agent's final text; raises ``SystemExit`` on a non-zero exit.
+        """
+        binary = self._resolve_binary()
+        command = self._agent_command(binary, mcp_config, allowed_tools, add_dirs)
+        return self._run_streaming(command, prompt, cwd=cwd, timeout=timeout)
+
+    def _agent_command(self, binary: str, mcp_config: "Optional[Path]",
+                       allowed_tools: "Optional[List[str]]",
+                       add_dirs: "Optional[List[Path]]") -> List[str]:
+        command = [
+            binary, "-p",
+            "--model", self.model,
+            "--effort", self.effort,
+            "--permission-mode", "bypassPermissions",
+            "--dangerously-skip-permissions",
+            "--output-format", "stream-json", "--verbose",
+        ]
+        if mcp_config:                           # load + ONLY use this MCP config
+            command += ["--mcp-config", str(mcp_config), "--strict-mcp-config"]
+        if allowed_tools:
+            command += ["--allowedTools", ",".join(allowed_tools)]
+        for d in add_dirs or []:
+            command += ["--add-dir", str(d)]
+        return command
+
+    def _run_streaming(self, command: List[str], prompt: str, *,
+                       cwd: "Optional[Path]" = None,
+                       timeout: "Optional[float]" = None) -> str:
+        """Run a stream-json print command, logging each event, return the result."""
+        proc = subprocess.Popen(
+            command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, text=True,
+            cwd=str(cwd) if cwd else None,
+        )
+        assert proc.stdin and proc.stdout
+        proc.stdin.write(prompt)
+        proc.stdin.close()
+        result_text = ""
+        for line in proc.stdout:                 # NDJSON: one event per line
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue                         # ignore any non-JSON noise
+            label = self._describe_event(event)
+            if label:
+                progress.log(f"    [prep] {label}")
+            if event.get("type") == "result" and event.get("result"):
+                result_text = event["result"]
+        try:
+            code = proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            raise SystemExit(f"{self.name} agentic run timed out after {timeout:.0f}s.")
+        if code != 0:
+            raise SystemExit(
+                f"{self.name} agentic run failed (exit {code}). "
+                f"If this says 'Not logged in', run `{command[0]} /login` once."
+            )
+        return result_text.strip()
+
+    @staticmethod
+    def _describe_event(event: dict) -> "Optional[str]":
+        """Turn one stream-json event into a short human progress line (or None)."""
+        etype = event.get("type")
+        if etype == "system" and event.get("subtype") == "init":
+            tools = event.get("mcp_servers") or []
+            names = ", ".join(s.get("name", "?") for s in tools) if tools else "none"
+            return f"session started (mcp servers: {names})"
+        if etype == "assistant":
+            for block in (event.get("message", {}) or {}).get("content", []) or []:
+                if block.get("type") == "tool_use":
+                    return f"using tool {block.get('name', '?')}"
+                if block.get("type") == "text" and block.get("text", "").strip():
+                    return block["text"].strip().splitlines()[0][:100]
+            return None
+        if etype == "result":
+            turns = event.get("num_turns")
+            return f"finished ({turns} turns)" if turns is not None else "finished"
+        return None
 
     def _not_found_message(self) -> str:
         return (
