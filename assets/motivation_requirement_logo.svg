@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   viewBox="106 5897 17.538761 10"
+   stroke-linecap="square"
+   stroke-miterlimit="10"
+   version="1.1"
+   id="svg6"
+   width="17.538761"
+   height="10"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs10" />
+  <g
+     id="g4"
+     transform="translate(-0.23061901,-0.5)">
+    <polygon
+       fill-opacity="1"
+       color-rendering="auto"
+       color-interpolation="auto"
+       text-rendering="optimizeLegibility"
+       stroke="#000000"
+       stroke-linecap="butt"
+       stroke-miterlimit="10"
+       shape-rendering="auto"
+       stroke-opacity="1"
+       fill="none"
+       stroke-dasharray="none"
+       stroke-width="1"
+       stroke-linejoin="miter"
+       stroke-dashoffset="0"
+       image-rendering="auto"
+       points="119,5907 107,5907 111,5898 123,5898 "
+       id="polygon2" />
+  </g>
+</svg>

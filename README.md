@@ -337,9 +337,9 @@ tts_provider: edge
 ai_cli: claude
 ---
 
-## Scene: 01_pengantar / Pengantar
+## Scene: 01_introduction / Introduction
 
-**file:** scene_01_pengantar.py
+**file:** scene_01_introduction.py
 **fallback_duration:** 14
 
 ### description
@@ -415,7 +415,7 @@ python3 video_generator/generate_video.py --storyboard SB.md --output OUT \
 
 # Smoke-test one scene's narration + audio only
 python3 video_generator/generate_video.py --storyboard SB.md --output OUT \
-    --stage audio --only 01_pengantar
+    --stage audio --only 01_introduction
 
 # Force a clean rebuild from scratch
 python3 video_generator/generate_video.py --storyboard SB.md --output OUT --force

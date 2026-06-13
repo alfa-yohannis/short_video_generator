@@ -96,7 +96,10 @@ def build_parser() -> argparse.ArgumentParser:
              "too dense (trim/split/rebalance scenes), keeping the whole video "
              "within the duration cap. If it changes the plan, everything is "
              "regenerated from scratch. The revision is saved to "
-             "<output>/storyboard.refined.md (your original file is untouched).",
+             "<output>/storyboard.refined.md (your original file is untouched). "
+             "Without this flag, an existing <output>/storyboard.refined.md from a "
+             "previous run is always reused; if none exists, the original is used. "
+             "--force removes the refined file and rebuilds from the original.",
     )
     parser.add_argument(
         "--run-preparation", action="store_true",

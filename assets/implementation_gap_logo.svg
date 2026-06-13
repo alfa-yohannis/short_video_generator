@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   viewBox="109 6855 17 14"
+   stroke-linecap="square"
+   stroke-miterlimit="10"
+   version="1.1"
+   id="svg10"
+   width="17"
+   height="14"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs14" />
+  <g
+     id="g8"
+     transform="translate(-1,-0.5)">
+    <circle
+       fill-opacity="1"
+       color-rendering="auto"
+       color-interpolation="auto"
+       text-rendering="optimizeLegibility"
+       stroke="#000000"
+       stroke-linecap="butt"
+       stroke-miterlimit="10"
+       shape-rendering="auto"
+       stroke-opacity="1"
+       fill="none"
+       stroke-dasharray="none"
+       stroke-width="1"
+       stroke-linejoin="miter"
+       stroke-dashoffset="0"
+       image-rendering="auto"
+       r="6.5"
+       cx="118.5"
+       cy="6862.5"
+       id="circle2" />
+    <line
+       fill-opacity="1"
+       color-rendering="auto"
+       color-interpolation="auto"
+       text-rendering="optimizeLegibility"
+       stroke="#000000"
+       stroke-linecap="butt"
+       stroke-miterlimit="10"
+       shape-rendering="auto"
+       stroke-opacity="1"
+       fill="none"
+       stroke-dasharray="none"
+       stroke-width="1"
+       stroke-linejoin="miter"
+       stroke-dashoffset="0"
+       image-rendering="auto"
+       x1="110"
+       x2="127"
+       y1="6861"
+       y2="6861"
+       id="line4" />
+    <line
+       fill-opacity="1"
+       color-rendering="auto"
+       color-interpolation="auto"
+       text-rendering="optimizeLegibility"
+       stroke="#000000"
+       stroke-linecap="butt"
+       stroke-miterlimit="10"
+       shape-rendering="auto"
+       stroke-opacity="1"
+       fill="none"
+       stroke-dasharray="none"
+       stroke-width="1"
+       stroke-linejoin="miter"
+       stroke-dashoffset="0"
+       image-rendering="auto"
+       x1="110"
+       x2="127"
+       y1="6864"
+       y2="6864"
+       id="line6" />
+  </g>
+</svg>

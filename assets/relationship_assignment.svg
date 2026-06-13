@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   viewBox="120 240 182.2693 7.7582693"
+   stroke-linecap="square"
+   stroke-miterlimit="10"
+   version="1.1"
+   id="svg12"
+   width="182.2693"
+   height="7.7582693"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs16" />
+  <g
+     id="g10"
+     transform="translate(-9,-33.24173)">
+    <path
+       fill-opacity="1"
+       color-rendering="auto"
+       color-interpolation="auto"
+       text-rendering="optimizeLegibility"
+       stroke="#000000"
+       stroke-linecap="butt"
+       stroke-miterlimit="10"
+       shape-rendering="auto"
+       stroke-opacity="1"
+       fill="none"
+       stroke-dasharray="none"
+       stroke-width="1"
+       stroke-linejoin="miter"
+       stroke-dashoffset="0"
+       image-rendering="auto"
+       d="M 129,277 H 310"
+       id="path2" />
+    <circle
+       fill-opacity="1"
+       color-rendering="auto"
+       color-interpolation="auto"
+       text-rendering="optimizeLegibility"
+       stroke="none"
+       stroke-linecap="butt"
+       stroke-miterlimit="10"
+       shape-rendering="auto"
+       stroke-opacity="1"
+       fill="#000000"
+       stroke-dasharray="none"
+       stroke-width="1"
+       stroke-linejoin="miter"
+       stroke-dashoffset="0"
+       image-rendering="auto"
+       r="3.5"
+       cx="132.5"
+       cy="277.5"
+       id="circle4" />
+    <polygon
+       fill-opacity="1"
+       color-rendering="auto"
+       color-interpolation="auto"
+       text-rendering="optimizeLegibility"
+       stroke="none"
+       stroke-linecap="butt"
+       stroke-miterlimit="10"
+       shape-rendering="auto"
+       stroke-opacity="1"
+       fill="#000000"
+       stroke-dasharray="none"
+       stroke-width="1"
+       stroke-linejoin="miter"
+       stroke-dashoffset="0"
+       image-rendering="auto"
+       points="303,274 310,277 303,280 "
+       id="polygon6" />
+    <polygon
+       fill-opacity="1"
+       color-rendering="auto"
+       color-interpolation="auto"
+       text-rendering="optimizeLegibility"
+       stroke="#000000"
+       stroke-linecap="butt"
+       stroke-miterlimit="10"
+       shape-rendering="auto"
+       stroke-opacity="1"
+       fill="none"
+       stroke-dasharray="none"
+       stroke-width="1"
+       stroke-linejoin="miter"
+       stroke-dashoffset="0"
+       image-rendering="auto"
+       points="303,274 310,277 303,280 "
+       id="polygon8" />
+  </g>
+</svg>

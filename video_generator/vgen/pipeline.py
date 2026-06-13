@@ -216,6 +216,21 @@ def run_build(options: BuildOptions) -> None:
     """Check dependencies, parse + configure the storyboard, and run the pipeline."""
     progress.reset()
     storyboard_path = Path(options.storyboard).resolve()
+    output = Path(options.output).resolve()
+    refined_path = output / "storyboard.refined.md"
+
+    # --force is a clean rebuild: wipe generated outputs (and any previously
+    # refined storyboard) up front, before we choose which storyboard to use.
+    if options.force:
+        _wipe_outputs(output)
+        refined_path.unlink(missing_ok=True)
+
+    # Without --refine-storyboard, always prefer a refined storyboard from a
+    # previous run if one exists. Only when there's no refined file (or --force
+    # removed it) is the original used.
+    if not options.refine_storyboard and refined_path.exists():
+        storyboard_path = refined_path
+        progress.log(f"  using previously refined storyboard: {refined_path}")
 
     if not options.skip_dep_check:
         if options.no_ai_cli_check:
@@ -236,13 +251,13 @@ def run_build(options: BuildOptions) -> None:
             "Get a key at https://aistudio.google.com/apikey."
         )
 
-    output = Path(options.output).resolve()
     output.mkdir(parents=True, exist_ok=True)
 
     # Optional pre-pass: let the AI rewrite an over-dense storyboard (within the
     # duration cap). If it actually changes the plan, the cached scripts/audio/
     # scenes from the OLD plan are stale, so we must regenerate from scratch.
-    regenerate = options.force
+    # (--force already wiped above, before the storyboard was chosen.)
+    regenerate = False
     if options.refine_storyboard:
         cap = storyboard.max_duration or config.DEFAULT_DURATION_CAP_SECONDS
         refined = StoryboardRefiner(create_ai_client(storyboard.ai_cli, options.effort)).refine(

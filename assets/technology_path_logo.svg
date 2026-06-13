@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   viewBox="108 3736 19.121321 11.06066"
+   stroke-linecap="square"
+   stroke-miterlimit="10"
+   version="1.1"
+   id="svg8"
+   width="19.121321"
+   height="11.06066"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs12" />
+  <g
+     id="g6"
+     transform="translate(0.06066017,-0.46966991)">
+    <path
+       fill-opacity="1"
+       color-rendering="auto"
+       color-interpolation="auto"
+       text-rendering="optimizeLegibility"
+       stroke="#000000"
+       stroke-linecap="butt"
+       stroke-miterlimit="10"
+       shape-rendering="auto"
+       stroke-opacity="1"
+       fill="none"
+       stroke-dasharray="none"
+       stroke-width="1.5"
+       stroke-linejoin="miter"
+       stroke-dashoffset="0"
+       image-rendering="auto"
+       d="m 112.5,3742 h 2 m 2,0 h 2 m 2,0 h 2"
+       fill-rule="evenodd"
+       id="path2" />
+    <path
+       fill-opacity="1"
+       color-rendering="auto"
+       color-interpolation="auto"
+       text-rendering="optimizeLegibility"
+       stroke="#000000"
+       stroke-linecap="butt"
+       stroke-miterlimit="10"
+       shape-rendering="auto"
+       stroke-opacity="1"
+       fill="none"
+       stroke-dasharray="none"
+       stroke-width="1.5"
+       stroke-linejoin="miter"
+       stroke-dashoffset="0"
+       image-rendering="auto"
+       d="m 114,3737 -5,5 5,5 m 7,-10 5,5 -5,5"
+       fill-rule="evenodd"
+       id="path4" />
+  </g>
+</svg>
