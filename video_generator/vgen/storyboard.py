@@ -38,6 +38,7 @@ read from the storyboard (use --gemini-api-key / $GEMINI_API_KEY / .env).
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -276,9 +277,47 @@ class StoryboardParser:
             project_brief=project_brief,
             preparation=preparation,
             preparation_profile=str(cfg.get("preparation_profile") or "generic"),
+            subject=self._read_subject(cfg),
+            template=str(cfg.get("template") or "").strip().lower(),
             min_duration=min_duration,
             max_duration=max_duration,
+            prep_assets_dir=self._read_assets_dir(cfg, base),
         )
+
+    @staticmethod
+    def _read_subject(cfg: dict) -> str:
+        """Resolve the subject pack name (subjects/<name>/) for this storyboard.
+
+        Explicit ``subject:`` wins. Otherwise a non-generic ``preparation_profile``
+        implies its subject (``archi`` -> ``archimate``), so storyboards that fetch
+        ArchiMate symbols via MCP need no extra key. Default: ``generic`` (which
+        reproduces the pre-subject behavior exactly)."""
+        explicit = str(cfg.get("subject") or "").strip().lower()
+        if explicit:
+            return explicit
+        prof = str(cfg.get("preparation_profile") or "").strip().lower()
+        if prof and prof != "generic":
+            return {"archi": "archimate"}.get(prof, prof)
+        return "generic"
+
+    @staticmethod
+    def _read_assets_dir(cfg: dict, base: Path) -> Optional[Path]:
+        """Resolve a storyboard-declared static reference-assets directory.
+
+        The ``assets_dir:`` (alias ``assets:``) front-matter key points at a
+        folder of ready-made symbol files plus a ``manifest.json``. When set, its
+        assets are listed in every scene prompt so scenes load the real artwork —
+        deterministically, with no ``--run-preparation`` agent, MCP, or network.
+        Relative paths resolve against the storyboard file. Returns ``None`` when
+        unset or the folder is missing (the build then falls back to primitives)."""
+        raw = cfg.get("assets_dir") or cfg.get("assets")
+        if not raw:
+            return None
+        p = Path(os.path.expanduser(os.path.expandvars(str(raw))))
+        if not p.is_absolute():
+            p = base / p
+        p = p.resolve()
+        return p if p.is_dir() else None
 
     # --- front-matter readers (each accepts a friendly alias) --------------
 
@@ -317,22 +356,31 @@ class StoryboardParser:
     @staticmethod
     def _read_languages(cfg: dict) -> List[str]:
         if cfg.get("languages"):
-            return list(cfg["languages"])
-        lang = cfg.get("language")
-        if lang:
-            s = str(lang).strip().lower()
-            return ["id", "en"] if s == "both" else [s]
-        return ["id", "en"]
+            vals = [str(x).strip().lower() for x in cfg["languages"]]
+        else:
+            s = str(cfg.get("language") or "").strip().lower()
+            vals = ["id", "en"] if (not s or s == "both") else [s]
+        bad = [v for v in vals if v not in ("id", "en")]
+        if bad:
+            raise SystemExit(
+                f"Invalid language value(s) {bad} in front-matter — use id | en | "
+                "both. (Did you swap the `language:` and `orientation:` keys?)")
+        return vals
 
     @staticmethod
     def _read_orientations(cfg: dict) -> List[str]:
         if cfg.get("orientations"):
-            return list(cfg["orientations"])
-        orient = cfg.get("orientation")
-        if orient:
-            s = str(orient).strip().lower()
-            return ["landscape", "portrait"] if s == "both" else [s]
-        return ["landscape", "portrait"]
+            vals = [str(x).strip().lower() for x in cfg["orientations"]]
+        else:
+            s = str(cfg.get("orientation") or "").strip().lower()
+            vals = ["landscape", "portrait"] if (not s or s == "both") else [s]
+        bad = [v for v in vals if v not in ("landscape", "portrait")]
+        if bad:
+            raise SystemExit(
+                f"Invalid orientation value(s) {bad} in front-matter — use landscape "
+                "| portrait | both. (Did you swap the `language:` and `orientation:` "
+                "keys?)")
+        return vals
 
     @staticmethod
     def _read_resolution(cfg: dict) -> Tuple[int, int]:

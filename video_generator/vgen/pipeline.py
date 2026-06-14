@@ -288,7 +288,9 @@ def _run_preparation(storyboard: Storyboard, output: Path, options: BuildOptions
     mcp_config = options.mcp_config or (config.REPO_ROOT / ".mcp.json")
     client = create_ai_client(storyboard.ai_cli, options.effort)
     runner = PreparationRunner(client, mcp_config)
-    storyboard.prep_assets_dir = runner.run(storyboard, output, options.force)
+    fetched = runner.run(storyboard, output, options.force)
+    if fetched is not None:                       # keep any front-matter assets_dir
+        storyboard.prep_assets_dir = fetched      # as a fallback when prep yields nothing
 
 
 def _run_with_splits(storyboard: Storyboard, output: Path, options: BuildOptions) -> None:

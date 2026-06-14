@@ -62,6 +62,8 @@ class Storyboard:
     project_brief: str
     preparation: str = ""  # setup/reference notes shown before the scenes, if any
     preparation_profile: str = "generic"  # which profiles/<name>.yaml --run-preparation uses
+    subject: str = "generic"  # which subjects/<name>/ pack drives scene guidance + helpers
+    template: str = ""        # which templates/<name>/ presentation scaffold ("" -> subject's, else default)
     min_duration: Optional[float] = None  # whole-video floor in seconds, or None
     max_duration: Optional[float] = None  # whole-video cap in seconds, or None
     # Runtime-only (never serialized): where --run-preparation saved reference
@@ -103,6 +105,10 @@ class Storyboard:
         lines.append(f"ai_cli: {self.ai_cli}")
         if self.preparation_profile and self.preparation_profile != "generic":
             lines.append(f"preparation_profile: {self.preparation_profile}")
+        if self.subject and self.subject != "generic":
+            lines.append(f"subject: {self.subject}")
+        if self.template:
+            lines.append(f"template: {self.template}")
         lines.append(f"fps: {self.fps}")
         w, h = self.resolution_landscape
         lines.append(f"resolution_landscape: [{w}, {h}]")
@@ -110,6 +116,11 @@ class Storyboard:
             lines.append(f"min_duration: {self.min_duration:g}")
         if self.max_duration is not None:
             lines.append(f"max_duration: {self.max_duration:g}")
+        # Preserve the declared static reference-assets dir across refinement;
+        # without this the refined storyboard loses assets_dir, so the scene
+        # prompts stop injecting the asset manifest (absolute logo paths) entirely.
+        if self.prep_assets_dir is not None:
+            lines.append(f"assets_dir: {self.prep_assets_dir}")
         lines.append("---")
         lines.append("")
         if self.project_brief:

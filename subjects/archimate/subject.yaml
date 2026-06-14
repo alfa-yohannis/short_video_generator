@@ -1,0 +1,37 @@
+name: archimate
+display_name: ArchiMate Modeling
+# Bulk-driver routing: a CSV row whose category/name contains any of these picks
+# this pack (replaces auto_generate_ea._is_togaf_topic's keyword check).
+aliases: [archi, archimate, enterprise architecture]
+
+# --- scene generation -------------------------------------------------------
+# Scene render helpers appended into each build's _common.py (see
+# vgen/scenes.py:materialize_dir). Only this subject's builds carry them.
+scene_helpers:
+  - helpers/archimate.py
+
+# Injected into the scene-generation prompt for this subject (was hardcoded in
+# vgen/scenes.py:_assets_note). Supports an optional {asset_listing} placeholder.
+scene_guidance: |
+  RENDERING — use the `_common` helpers so the result is identical at EVERY --effort level (low through max):
+  - ArchiMate element box: `archi_element(name, "<logo .svg path>", "<layer>")` (layer = strategy/business/application/technology/motivation/physical/implementation/other) — a layer-colored rounded box with the name inside and the real type logo in the TOP-RIGHT corner. ALWAYS use it for elements; never hand-build the box or drop the logo.
+  - These `*_logo.svg` files are THIN OUTLINE glyphs: a bare `SVGMobject(path)` renders nearly INVISIBLE when small. If you load one directly, use `archi_logo(path)` or `SVGMobject(path).set_stroke(BLACK, width=2.6)` so it actually shows.
+  - Relationships are DRAWN, never SVG — use `assignment_arrow`, `serving_arrow`, `influence_arrow`, `realization_arrow`, `composition_arrow`, `association_arrow`(start, end, label=...).
+
+# Where this subject's reference symbols come from. ArchiMate storyboards declare
+# a static `assets_dir:` (a folder of *_logo.svg + manifest.json); the `archi`
+# preparation profile (profiles/archi.yaml) can fetch them via MCP instead.
+asset_source:
+  type: static
+  profile: archi
+
+# --- bulk driver (auto_generate.py) -----------------------------------------
+csv: enterprise_architecture_todo.csv
+naming:
+  title_suffix: ""               # front-matter title = slug (no suffix)
+  storyboard_suffix: _storyboard.md
+storyboard:
+  prompt_file: storyboard_prompt.md
+  exemplar_file: exemplars/default.md
+cli_flags: [--tts, edge, --ai-cli, claude, --effort, xhigh,
+            --refine-storyboard, --validate-scenes, --force]

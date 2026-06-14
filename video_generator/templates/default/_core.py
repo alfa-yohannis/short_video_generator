@@ -1,4 +1,10 @@
-"""Shared helpers + theme for landscape (16:9) scenes."""
+"""Shared helpers + theme — orientation-agnostic CORE.
+
+This is a FRAGMENT: scenes.SceneSynthesizer.materialize_dir composes a
+build's _common.py from an orientation delta (templates/common/_landscape.py
+or _portrait.py) spliced in at the ORIENTATION_DELTA marker, followed by the
+active subject pack's helpers. The delta defines the size constants + frame
+config used below, so this file is not importable on its own."""
 
 import os
 import subprocess
@@ -554,7 +560,7 @@ def _make_brand_logo():
         return None
 
     fw, fh = config.frame_width, config.frame_height
-    target_w = min(2.0, max(1.5, fw * 0.135))   # small (landscape)
+    target_w = min(LOGO_W_CAP, max(LOGO_W_FLOOR, fw * LOGO_W_FACTOR))
     logo.scale_to_fit_width(target_w)
     margin = 0.3
     x = fw / 2 - margin - logo.width / 2
@@ -625,21 +631,24 @@ Scene.play = _patched_scene_play
 Scene.wait = _patched_scene_wait
 
 
+# <<ORIENTATION_DELTA>>
+
+
 # --- Typography helpers ---------------------------------------------------
 # Title / heading: Noto Sans SemiBold (with Bold reserved for very large
 # display type). Body: Noto Sans Regular. Subtitles: Noto Sans Medium.
 
-def title_text(text: str, size: int = 40, color=PRIMARY,
+def title_text(text: str, size: int = TITLE_SIZE, color=PRIMARY,
                weight=W_BOLD) -> MarkupText:
     return MarkupText(text, font_size=size, weight=weight, color=color)
 
 
-def body_text(text: str, size: int = 28, color=TEXT,
+def body_text(text: str, size: int = BODY_SIZE, color=TEXT,
               weight=W_REGULAR) -> MarkupText:
     return MarkupText(text, font_size=size, color=color, weight=weight)
 
 
-def section_label(text: str, color=ACCENT, size: int = 24,
+def section_label(text: str, color=ACCENT, size: int = SECTION_SIZE,
                   weight=W_SEMIBOLD) -> MarkupText:
     return MarkupText(text, font_size=size, weight=weight, color=color)
 
@@ -662,24 +671,30 @@ def tech_background() -> VGroup:
         lines.add(Line([-fw / 2, y, 0], [fw / 2, y, 0]))
     lines.set_stroke(GRID, width=1, opacity=0.42)
 
-    top_rule = Rectangle(width=fw, height=0.04, fill_color=ACCENT,
+    top_rule = Rectangle(width=fw, height=TOP_RULE_H, fill_color=ACCENT,
                          fill_opacity=0.95, stroke_opacity=0)
     top_rule.to_edge(UP, buff=0)
-    corner = VGroup(
-        Line([-fw / 2 + 0.55, fh / 2 - 0.55, 0],
-             [-fw / 2 + 1.45, fh / 2 - 0.55, 0]),
-        Line([-fw / 2 + 0.55, fh / 2 - 0.55, 0],
-             [-fw / 2 + 0.55, fh / 2 - 1.2, 0]),
-    )
-    corner.set_stroke(HIGHLIGHT, width=3, opacity=0.75)
+    if SHORTS_SAFE_BOTTOM is None:
+        accent = VGroup(
+            Line([-fw / 2 + 0.55, fh / 2 - 0.55, 0],
+                 [-fw / 2 + 1.45, fh / 2 - 0.55, 0]),
+            Line([-fw / 2 + 0.55, fh / 2 - 0.55, 0],
+                 [-fw / 2 + 0.55, fh / 2 - 1.2, 0]),
+        )
+        accent.set_stroke(HIGHLIGHT, width=3, opacity=0.75)
+    else:
+        accent = DashedLine([-fw / 2 + 0.35, SHORTS_SAFE_BOTTOM, 0],
+                            [fw / 2 - 0.35, SHORTS_SAFE_BOTTOM, 0],
+                            color=GRID, dash_length=0.18, stroke_width=1.4)
+        accent.set_opacity(0.35)
 
-    bg = VGroup(base, lines, top_rule, corner)
+    bg = VGroup(base, lines, top_rule, accent)
     bg.set_z_index(-20)
     return bg
 
 
 def soft_panel(width: float, height: float, stroke=PRIMARY, fill=CARD_BG,
-               radius: float = 0.16, stroke_width: float = 2,
+               radius: float = SOFT_RADIUS, stroke_width: float = 2,
                shadow: bool = True) -> VGroup:
     panel = RoundedRectangle(corner_radius=radius, width=width, height=height,
                              stroke_color=stroke, stroke_width=stroke_width,
@@ -710,16 +725,16 @@ def fit_inside(content: Mobject, box: Mobject, pad: float = 0.25) -> Mobject:
     return content
 
 
-def node_label(text: str, color=PRIMARY, width: float = 2.6,
-               height: float = 0.72, font_size: int = 20,
+def node_label(text: str, color=PRIMARY, width: float = NODE_W,
+               height: float = NODE_H, font_size: int = NODE_FS,
                fill: str = CARD_BG) -> VGroup:
-    box = RoundedRectangle(corner_radius=0.12, width=width, height=height,
+    box = RoundedRectangle(corner_radius=NODE_RADIUS, width=width, height=height,
                            stroke_color=color, stroke_width=2,
                            fill_color=fill, fill_opacity=1.0)
     label = MarkupText(text, font_size=font_size, color=color,
                        weight=W_SEMIBOLD).move_to(box.get_center())
-    if label.width > width - 0.35:
-        label.scale((width - 0.35) / label.width)
+    if label.width > width - NODE_MARGIN:
+        label.scale((width - NODE_MARGIN) / label.width)
     return VGroup(box, label)
 
 
@@ -728,14 +743,14 @@ def node_label(text: str, color=PRIMARY, width: float = 2.6,
 def title_bar(text: str, eyebrow: str = "") -> VGroup:
     bar = Rectangle(
         width=config.frame_width,
-        height=0.88,
+        height=BAR_H,
         fill_color=PANEL_DARK,
         fill_opacity=1.0,
         stroke_opacity=0,
     ).to_edge(UP, buff=0)
     accent_strip = Rectangle(
         width=config.frame_width,
-        height=0.06,
+        height=BAR_STRIP_H,
         fill_color=HIGHLIGHT,
         fill_opacity=1.0,
         stroke_opacity=0,
@@ -744,29 +759,29 @@ def title_bar(text: str, eyebrow: str = "") -> VGroup:
                             fill_color=ACCENT, fill_opacity=1.0,
                             stroke_opacity=0).align_to(bar, LEFT)
     left_accent.move_to([left_accent.get_center()[0], bar.get_center()[1], 0])
-    title = MarkupText(text, font_size=31, weight=W_SEMIBOLD,
+    title = MarkupText(text, font_size=BAR_TITLE_FS, weight=W_SEMIBOLD,
                        color=WHITE)
     if eyebrow:
-        tag = MarkupText(eyebrow, font_size=13, weight=W_SEMIBOLD,
+        tag = MarkupText(eyebrow, font_size=BAR_TAG_FS, weight=W_SEMIBOLD,
                          color=HIGHLIGHT)
-        label = VGroup(tag, title).arrange(DOWN, aligned_edge=LEFT, buff=0.03)
+        label = VGroup(tag, title).arrange(DOWN, aligned_edge=LEFT, buff=BAR_TAG_BUFF)
     else:
         label = VGroup(title)
-    label.move_to(bar.get_center()).align_to(bar, LEFT).shift(RIGHT * 0.55)
-    if label.width > config.frame_width - 1.1:
-        label.scale((config.frame_width - 1.1) / label.width)
-        label.align_to(bar, LEFT).shift(RIGHT * 0.55)
+    label.move_to(bar.get_center()).align_to(bar, LEFT).shift(RIGHT * BAR_SHIFT)
+    if label.width > config.frame_width - BAR_PAD:
+        label.scale((config.frame_width - BAR_PAD) / label.width)
+        label.align_to(bar, LEFT).shift(RIGHT * BAR_SHIFT)
     return VGroup(bar, left_accent, accent_strip, label)
 
 
 # --- Bullet list ---------------------------------------------------------
 
-def bullet_list(items, size: int = 28, dot_color=HIGHLIGHT,
-                text_color=TEXT, buff_v: float = 0.35,
+def bullet_list(items, size: int = BULLET_SIZE, dot_color=HIGHLIGHT,
+                text_color=TEXT, buff_v: float = BULLET_BUFF_V,
                 buff_h: float = 0.3) -> VGroup:
     rows = VGroup()
     for s in items:
-        dot = RoundedRectangle(corner_radius=0.03, width=0.18, height=0.18,
+        dot = RoundedRectangle(corner_radius=BULLET_DOT_RAD, width=BULLET_DOT_SIZE, height=BULLET_DOT_SIZE,
                                stroke_opacity=0, fill_color=dot_color,
                                fill_opacity=1.0)
         t = MarkupText(s, font_size=size, color=text_color)
@@ -833,7 +848,7 @@ def uml_class_box(name: str, stereotype: str | None = None,
                   attrs: list[str] | None = None,
                   methods: list[str] | None = None,
                   stroke=PRIMARY, fill=CARD_BG,
-                  width: float = 4.2, header_color=None) -> VGroup:
+                  width: float = UML_W, header_color=None) -> VGroup:
     """3-compartment UML class (header, attrs, methods)."""
     header_color = header_color or stroke
     parts = VGroup()
@@ -841,15 +856,15 @@ def uml_class_box(name: str, stereotype: str | None = None,
     header_inner = VGroup()
     if stereotype:
         header_inner.add(MarkupText(f"«{stereotype}»",
-                                    font_size=18, color=ACCENT,
+                                    font_size=UML_STEREO_FS, color=ACCENT,
                                     slant=ITALIC))
-    header_inner.add(MarkupText(name, font_size=22, weight=BOLD,
+    header_inner.add(MarkupText(name, font_size=UML_NAME_FS, weight=BOLD,
                                 color=header_color))
     header_inner.arrange(DOWN, buff=0.06)
-    max_inner_width = width - 0.36
+    max_inner_width = width - UML_INNER_PAD
     if header_inner.width > max_inner_width:
         header_inner.scale(max_inner_width / header_inner.width)
-    header_h = header_inner.height + 0.28
+    header_h = header_inner.height + UML_PAD
     header_rect = Rectangle(width=width, height=header_h,
                             stroke_color=stroke, stroke_width=2,
                             fill_color=PANEL_DARK, fill_opacity=1.0)
@@ -860,39 +875,39 @@ def uml_class_box(name: str, stereotype: str | None = None,
 
     if attrs:
         attr_lines = VGroup(*[
-            MarkupText(s, font_size=18, color=TEXT) for s in attrs
+            MarkupText(s, font_size=UML_BODY_FS, color=TEXT) for s in attrs
         ]).arrange(DOWN, buff=0.08, aligned_edge=LEFT)
-        max_inner_width = width - 0.36
+        max_inner_width = width - UML_INNER_PAD
         if attr_lines.width > max_inner_width:
             attr_lines.scale(max_inner_width / attr_lines.width)
-        attr_h = attr_lines.height + 0.28
+        attr_h = attr_lines.height + UML_PAD
         attr_rect = Rectangle(width=width, height=attr_h,
                               stroke_color=stroke, stroke_width=2,
                               fill_color=fill, fill_opacity=1.0)
         attr_lines.move_to(attr_rect.get_center()).align_to(
-            attr_rect.get_left(), LEFT).shift(RIGHT * 0.18)
+            attr_rect.get_left(), LEFT).shift(RIGHT * UML_SHIFT)
         parts.add(VGroup(attr_rect, attr_lines))
 
     if methods:
         meth_lines = VGroup(*[
-            MarkupText(s, font_size=18, color=TEXT) for s in methods
+            MarkupText(s, font_size=UML_BODY_FS, color=TEXT) for s in methods
         ]).arrange(DOWN, buff=0.08, aligned_edge=LEFT)
-        max_inner_width = width - 0.36
+        max_inner_width = width - UML_INNER_PAD
         if meth_lines.width > max_inner_width:
             meth_lines.scale(max_inner_width / meth_lines.width)
-        meth_h = meth_lines.height + 0.28
+        meth_h = meth_lines.height + UML_PAD
         meth_rect = Rectangle(width=width, height=meth_h,
                               stroke_color=stroke, stroke_width=2,
                               fill_color=fill, fill_opacity=1.0)
         meth_lines.move_to(meth_rect.get_center()).align_to(
-            meth_rect.get_left(), LEFT).shift(RIGHT * 0.18)
+            meth_rect.get_left(), LEFT).shift(RIGHT * UML_SHIFT)
         parts.add(VGroup(meth_rect, meth_lines))
 
     parts.arrange(DOWN, buff=0)
     return parts
 
 
-def _hollow_triangle(tip, base_center, color=PRIMARY, size: float = 0.28):
+def _hollow_triangle(tip, base_center, color=PRIMARY, size: float = HEAD_SIZE):
     tip = np.array(tip, dtype=float)
     base_center = np.array(base_center, dtype=float)
     direction = tip - base_center
@@ -910,7 +925,7 @@ def _hollow_triangle(tip, base_center, color=PRIMARY, size: float = 0.28):
 
 
 def realization_arrow(start, end, color=PRIMARY,
-                      dash_length: float = 0.18) -> VGroup:
+                      dash_length: float = REAL_DASH) -> VGroup:
     start = np.array(start, dtype=float)
     end = np.array(end, dtype=float)
     direction = end - start
@@ -918,7 +933,7 @@ def realization_arrow(start, end, color=PRIMARY,
     if norm == 0:
         return VGroup()
     unit = direction / norm
-    head_size = 0.28
+    head_size = HEAD_SIZE
     line_end = end - unit * head_size
     line = DashedLine(start, line_end, color=color,
                       dash_length=dash_length, stroke_width=2.5)
@@ -934,12 +949,12 @@ def association_arrow(start, end, color=PRIMARY,
                   max_stroke_width_to_length_ratio=5.0)
     group = VGroup(arrow)
     if label:
-        lbl = MarkupText(label, font_size=18, color=color, slant=ITALIC)
+        lbl = MarkupText(label, font_size=ASSOC_FS, color=color, slant=ITALIC)
         mid = (np.array(start) + np.array(end)) / 2
         direction = np.array(end) - np.array(start)
         if np.linalg.norm(direction) > 0:
             unit = direction / np.linalg.norm(direction)
-            perp = np.array([-unit[1], unit[0], 0]) * 0.3
+            perp = np.array([-unit[1], unit[0], 0]) * ASSOC_PERP
             lbl.move_to(mid + perp)
         else:
             lbl.next_to(arrow, UP, buff=0.1)

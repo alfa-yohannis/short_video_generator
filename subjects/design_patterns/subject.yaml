@@ -1,0 +1,24 @@
+name: design_patterns
+display_name: Software Design Patterns
+aliases: [design pattern, gof, solid]
+
+# --- scene generation -------------------------------------------------------
+# Code-only tutorials: no reference assets, no subject-specific scene helpers
+# (the generic uml_class_box / realization_arrow / association_arrow in
+# _common.py cover class diagrams), and no extra scene guidance — so a
+# design-pattern build is byte-for-byte what it was before subject packs existed.
+scene_helpers: []
+scene_guidance: ""
+asset_source:
+  type: none
+
+# --- bulk driver (auto_generate.py) -----------------------------------------
+csv: design_patterns_todo.csv
+naming:
+  title_suffix: _pattern           # front-matter title = "<slug>_pattern"
+  storyboard_suffix: _pattern_storyboard.md
+storyboard:
+  prompt_file: storyboard_prompt.md
+  exemplar_file: exemplars/default.md
+cli_flags: [--tts, edge, --ai-cli, claude, --effort, xhigh,
+            --refine-storyboard, --validate-scenes, --force]

@@ -1,0 +1,26 @@
+name: togaf
+display_name: TOGAF ADM
+aliases: [togaf, adm]
+
+# --- scene generation -------------------------------------------------------
+# TOGAF is a METHOD taught as process flows (ADM cycle, inputs -> activities ->
+# deliverables), not a notation with reference symbols. No subject scene helpers
+# yet — a future helpers/togaf_flow.py (phase wheel, flow arrows) can be added
+# here and to scene_helpers without touching vgen/. No reference assets.
+scene_helpers: []
+scene_guidance: ""
+asset_source:
+  type: none
+
+# --- bulk driver (auto_generate.py) -----------------------------------------
+# Shares the enterprise-architecture queue with the archimate pack; the driver
+# routes each CSV row to archimate or togaf by category (see aliases).
+csv: enterprise_architecture_todo.csv
+naming:
+  title_suffix: ""
+  storyboard_suffix: _storyboard.md
+storyboard:
+  prompt_file: storyboard_prompt.md
+  exemplar_file: exemplars/default.md
+cli_flags: [--tts, edge, --ai-cli, claude, --effort, xhigh,
+            --refine-storyboard, --validate-scenes, --force]

@@ -25,6 +25,7 @@ from .density import SceneTooDenseError, is_too_dense
 from .models import Scene, Storyboard
 from .preparation import is_noop_preparation, load_manifest
 from .progress import progress
+from .subjects import get_subject
 from .text_utils import (
     escape_unsafe_ampersands,
     python_syntax_error,
@@ -73,19 +74,58 @@ class SceneSynthesizer:
         target = (output / f"scenes_{orient}").resolve()
         target.mkdir(parents=True, exist_ok=True)
 
-        template_common = config.TEMPLATES_DIR / f"scenes_{orient}" / "_common.py"
+        # Compose the build's _common.py from the selected presentation TEMPLATE
+        # plus the active subject's helpers, so a build carries only what it needs
+        # and there is a single source of truth:
+        #   1. the chosen template (templates/<template>/): its orientation-agnostic
+        #      CORE (_core.py) with the orientation delta (_<orient>.py) spliced in
+        #      at the ORIENTATION_DELTA marker. The template is the storyboard's
+        #      `template:` (else the subject's, else DEFAULT_TEMPLATE); an unknown
+        #      name falls back to the default so a build never loses its scaffold.
+        #   2. the ACTIVE subject pack's scene helpers (e.g. ArchiMate's
+        #      archi_element / arrows) — so design-pattern builds carry no ArchiMate
+        #      code and the scene prompt (which injects _common verbatim) shows only
+        #      the relevant helpers.
+        # Rewritten only when it would change, so a template OR subject change is
+        # picked up on the next build.
+        pack = get_subject(getattr(storyboard, "subject", "generic"))
+        tmpl = (getattr(storyboard, "template", "") or pack.template
+                or config.DEFAULT_TEMPLATE)
+        tdir = config.TEMPLATES_DIR / tmpl
+        core_file, delta_file = tdir / "_core.py", tdir / f"_{orient}.py"
+        if not (core_file.exists() and delta_file.exists()):
+            if tmpl != config.DEFAULT_TEMPLATE:
+                progress.log(f"  template '{tmpl}' not found; using "
+                             f"'{config.DEFAULT_TEMPLATE}'.")
+            tdir = config.TEMPLATES_DIR / config.DEFAULT_TEMPLATE
+            core_file, delta_file = tdir / "_core.py", tdir / f"_{orient}.py"
+        if not (core_file.exists() and delta_file.exists()):
+            return target
+        composed = core_file.read_text(encoding="utf-8").replace(
+            "# <<ORIENTATION_DELTA>>", delta_file.read_text(encoding="utf-8"))
         target_common = target / "_common.py"
-        if template_common.exists() and (
-            not target_common.exists()
-            or target_common.read_bytes() != template_common.read_bytes()
-        ):
-            shutil.copy2(template_common, target_common)
+        for fname, src in pack.helper_sources():
+            composed += (f"\n\n# === subject '{pack.name}' helper: {fname} "
+                         "(composed into _common by materialize_dir) ===\n" + src)
+        if (not target_common.exists()
+                or target_common.read_text(encoding="utf-8") != composed):
+            target_common.write_text(composed, encoding="utf-8")
 
         assets_src = config.TEMPLATES_DIR / "assets"
         if assets_src.exists():
             # Merge-copy so new template assets (e.g. logo/) land in existing
             # build dirs too, not only freshly-created ones.
             shutil.copytree(assets_src, output / "assets", dirs_exist_ok=True)
+
+        # Stage the storyboard's declared reference assets (assets_dir:) into the
+        # build's assets/ too. The scene prompt injects each asset's ABSOLUTE
+        # path, but generated scenes often rebuild the path from ROOT_DIR/assets
+        # instead; without this copy those *_logo.svg lookups miss and the type
+        # icon silently renders as nothing. Copying here makes the icon resolve
+        # whether the scene uses the absolute path or a ROOT_DIR/assets lookup.
+        declared_assets = getattr(storyboard, "prep_assets_dir", None)
+        if declared_assets and Path(declared_assets).is_dir():
+            shutil.copytree(declared_assets, output / "assets", dirs_exist_ok=True)
         return target
 
     def ensure_all(self, storyboard: Storyboard, output: Path, force: bool) -> Tuple[Optional[Path], Optional[Path]]:
@@ -252,13 +292,21 @@ class SceneSynthesizer:
             lines.append(f"  - {s['type']}{layer}: {path}")
         listing = "\n".join(lines)
         return (
-            "\nREFERENCE ASSETS (real artwork fetched for this build — PREFER these "
-            "over invented shapes). Load the matching file with `SVGMobject"
-            "(\"<path>\")` for .svg or `ImageMobject(\"<path>\")` for .jpg/.png, size "
-            "it to fit, and label it; only fall back to a primitive when no asset "
-            "below matches:\n"
+            "\nREFERENCE ASSETS (real artwork for this build — these are MANDATORY). "
+            "For every element/relationship/symbol a scene shows, you MUST load the "
+            "matching real file below — `SVGMobject(\"<path>\")` for .svg or "
+            "`ImageMobject(\"<path>\")` for .jpg/.png — then size and label it. Do NOT "
+            "draw, redraw, recolor, or invent a shape for anything that has an asset "
+            "below; a hand-built primitive is allowed ONLY when no asset matches its "
+            "type. Reference these exact paths verbatim in the scene file — they "
+            "are already absolute, so pass each one directly as a string literal; "
+            "do NOT rebuild a path from ROOT_DIR, __file__, or an assets/ subfolder "
+            "(those lookups miss and the asset silently renders as nothing):\n"
             f"{listing}\n"
         )
+        # Subject-specific rendering rules (e.g. ArchiMate's archi_element +
+        # relationship arrows) used to be hardcoded here; they now live in the
+        # active subject pack's `scene_guidance` and are injected by build_prompt.
 
     def build_prompt(self, storyboard: Storyboard, scene: Scene, orient: str,
                      skeleton: str, common_src: str) -> str:
@@ -273,6 +321,12 @@ class SceneSynthesizer:
                 f"{storyboard.preparation.strip()}\n"
             )
         assets_note = self._assets_note(storyboard)
+        # Subject-specific rendering guidance (notation rules + which helpers to
+        # use), from the active subject pack. Injected whether or not the build
+        # has reference assets, so asset-less subjects (e.g. a process-flow TOGAF
+        # pack) get their guidance too. Empty for the 'generic' subject.
+        subject_guidance = get_subject(storyboard.subject).guidance()
+        subject_note = f"\n{subject_guidance.strip()}\n" if subject_guidance.strip() else ""
         portrait_note = ""
         if orient == "portrait":
             portrait_note = (
@@ -287,7 +341,7 @@ class SceneSynthesizer:
 PROJECT TITLE: {storyboard.title}
 PROJECT BRIEF:
 {storyboard.project_brief}
-{prep_note}{assets_note}
+{prep_note}{assets_note}{subject_note}
 SCENE BASENAME: {scene.basename}
 SCENE CLASS:    {scene.classname}
 ORIENTATION:    {orient} (a parallel file will exist for {other_orient})

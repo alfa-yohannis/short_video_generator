@@ -113,6 +113,19 @@ PREPARATION_TIMEOUT_SECONDS = 900.0
 # storyboard's ``preparation_profile:`` key selects one. See vgen/preparation.py.
 PROFILES_DIR = REPO_ROOT / "profiles"
 
+# Subject packs live as folders here (repo-root ``subjects/<name>/``); the
+# storyboard's ``subject:`` key selects one. A pack bundles the scene-render
+# helpers, the scene-prompt guidance, and the bulk-driver storyboard prompt /
+# exemplar / naming / flags for one teaching subject. See vgen/subjects.py.
+SUBJECTS_DIR = REPO_ROOT / "subjects"
+
+# The presentation TEMPLATE — the _core scaffold (palette, top bar, background,
+# typography, helpers) plus its orientation deltas — is a folder
+# ``templates/<name>/`` holding _core.py + _landscape.py + _portrait.py. A
+# storyboard's ``template:`` key (or a subject pack's ``template:``) selects one,
+# defaulting to ``templates/default/``. See vgen/scenes.py:materialize_dir.
+DEFAULT_TEMPLATE = "default"
+
 # --- YouTube field limits --------------------------------------------------
 YT_TITLE_MAX = 100
 YT_DESC_MAX = 5000

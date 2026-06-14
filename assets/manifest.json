@@ -1,0 +1,664 @@
+{
+  "symbols": [
+    {
+      "type": "Application Collaboration",
+      "file": "application_application_collaboration.svg",
+      "layer": "application"
+    },
+    {
+      "type": "Application Collaboration (logo)",
+      "file": "application_application_collaboration_logo.svg",
+      "layer": "application",
+      "variant": "logo"
+    },
+    {
+      "type": "Application Component",
+      "file": "application_application_component.svg",
+      "layer": "application"
+    },
+    {
+      "type": "Application Component (logo)",
+      "file": "application_application_component_logo.svg",
+      "layer": "application",
+      "variant": "logo"
+    },
+    {
+      "type": "Application Event",
+      "file": "application_application_event.svg",
+      "layer": "application"
+    },
+    {
+      "type": "Application Event (logo)",
+      "file": "application_application_event_logo.svg",
+      "layer": "application",
+      "variant": "logo"
+    },
+    {
+      "type": "Application Function",
+      "file": "application_application_function.svg",
+      "layer": "application"
+    },
+    {
+      "type": "Application Function (logo)",
+      "file": "application_application_function_logo.svg",
+      "layer": "application",
+      "variant": "logo"
+    },
+    {
+      "type": "Application Interaction",
+      "file": "application_application_interaction.svg",
+      "layer": "application"
+    },
+    {
+      "type": "Application Interaction (logo)",
+      "file": "application_application_interaction_logo.svg",
+      "layer": "application",
+      "variant": "logo"
+    },
+    {
+      "type": "Application Interface",
+      "file": "application_application_interface.svg",
+      "layer": "application"
+    },
+    {
+      "type": "Application Interface (logo)",
+      "file": "application_application_interface_logo.svg",
+      "layer": "application",
+      "variant": "logo"
+    },
+    {
+      "type": "Application Process",
+      "file": "application_application_process.svg",
+      "layer": "application"
+    },
+    {
+      "type": "Application Process (logo)",
+      "file": "application_application_process_logo.svg",
+      "layer": "application",
+      "variant": "logo"
+    },
+    {
+      "type": "Application Service",
+      "file": "application_application_service.svg",
+      "layer": "application"
+    },
+    {
+      "type": "Application Service (logo)",
+      "file": "application_application_service_logo.svg",
+      "layer": "application",
+      "variant": "logo"
+    },
+    {
+      "type": "Data Object",
+      "file": "application_data_object.svg",
+      "layer": "application"
+    },
+    {
+      "type": "Data Object (logo)",
+      "file": "application_data_object_logo.svg",
+      "layer": "application",
+      "variant": "logo"
+    },
+    {
+      "type": "Business Actor",
+      "file": "business_business_actor.svg",
+      "layer": "business"
+    },
+    {
+      "type": "Business Actor (logo)",
+      "file": "business_business_actor_logo.svg",
+      "layer": "business",
+      "variant": "logo"
+    },
+    {
+      "type": "Business Collaboration",
+      "file": "business_business_collaboration.svg",
+      "layer": "business"
+    },
+    {
+      "type": "Business Collaboration (logo)",
+      "file": "business_business_collaboration_logo.svg",
+      "layer": "business",
+      "variant": "logo"
+    },
+    {
+      "type": "Business Event",
+      "file": "business_business_event.svg",
+      "layer": "business"
+    },
+    {
+      "type": "Business Event (logo)",
+      "file": "business_business_event_logo.svg",
+      "layer": "business",
+      "variant": "logo"
+    },
+    {
+      "type": "Business Function",
+      "file": "business_business_function.svg",
+      "layer": "business"
+    },
+    {
+      "type": "Business Function (logo)",
+      "file": "business_business_function_logo.svg",
+      "layer": "business",
+      "variant": "logo"
+    },
+    {
+      "type": "Business Interaction",
+      "file": "business_business_interaction.svg",
+      "layer": "business"
+    },
+    {
+      "type": "Business Interaction (logo)",
+      "file": "business_business_interaction_logo.svg",
+      "layer": "business",
+      "variant": "logo"
+    },
+    {
+      "type": "Business Interface",
+      "file": "business_business_interface.svg",
+      "layer": "business"
+    },
+    {
+      "type": "Business Interface (logo)",
+      "file": "business_business_interface_logo.svg",
+      "layer": "business",
+      "variant": "logo"
+    },
+    {
+      "type": "Business Object",
+      "file": "business_business_object.svg",
+      "layer": "business"
+    },
+    {
+      "type": "Business Object (logo)",
+      "file": "business_business_object_logo.svg",
+      "layer": "business",
+      "variant": "logo"
+    },
+    {
+      "type": "Business Process",
+      "file": "business_business_process.svg",
+      "layer": "business"
+    },
+    {
+      "type": "Business Process (logo)",
+      "file": "business_business_process_logo.svg",
+      "layer": "business",
+      "variant": "logo"
+    },
+    {
+      "type": "Business Role",
+      "file": "business_business_role.svg",
+      "layer": "business"
+    },
+    {
+      "type": "Business Role (logo)",
+      "file": "business_business_role_logo.svg",
+      "layer": "business",
+      "variant": "logo"
+    },
+    {
+      "type": "Business Service",
+      "file": "business_business_service.svg",
+      "layer": "business"
+    },
+    {
+      "type": "Business Service (logo)",
+      "file": "business_business_service_logo.svg",
+      "layer": "business",
+      "variant": "logo"
+    },
+    {
+      "type": "Contract",
+      "file": "business_contract.svg",
+      "layer": "business"
+    },
+    {
+      "type": "Contract (logo)",
+      "file": "business_contract_logo.svg",
+      "layer": "business",
+      "variant": "logo"
+    },
+    {
+      "type": "Product",
+      "file": "business_product.svg",
+      "layer": "business"
+    },
+    {
+      "type": "Product (logo)",
+      "file": "business_product_logo.svg",
+      "layer": "business",
+      "variant": "logo"
+    },
+    {
+      "type": "Representation",
+      "file": "business_representation.svg",
+      "layer": "business"
+    },
+    {
+      "type": "Representation (logo)",
+      "file": "business_representation_logo.svg",
+      "layer": "business",
+      "variant": "logo"
+    },
+    {
+      "type": "Deliverable",
+      "file": "implementation_deliverable.svg",
+      "layer": "implementation"
+    },
+    {
+      "type": "Deliverable (logo)",
+      "file": "implementation_deliverable_logo.svg",
+      "layer": "implementation",
+      "variant": "logo"
+    },
+    {
+      "type": "Gap",
+      "file": "implementation_gap.svg",
+      "layer": "implementation"
+    },
+    {
+      "type": "Gap (logo)",
+      "file": "implementation_gap_logo.svg",
+      "layer": "implementation",
+      "variant": "logo"
+    },
+    {
+      "type": "Implementation Event",
+      "file": "implementation_implementation_event.svg",
+      "layer": "implementation"
+    },
+    {
+      "type": "Implementation Event (logo)",
+      "file": "implementation_implementation_event_logo.svg",
+      "layer": "implementation",
+      "variant": "logo"
+    },
+    {
+      "type": "Plateau",
+      "file": "implementation_plateau.svg",
+      "layer": "implementation"
+    },
+    {
+      "type": "Plateau (logo)",
+      "file": "implementation_plateau_logo.svg",
+      "layer": "implementation",
+      "variant": "logo"
+    },
+    {
+      "type": "Work Package",
+      "file": "implementation_work_package.svg",
+      "layer": "implementation"
+    },
+    {
+      "type": "Work Package (logo)",
+      "file": "implementation_work_package_logo.svg",
+      "layer": "implementation",
+      "variant": "logo"
+    },
+    {
+      "type": "Assessment",
+      "file": "motivation_assessment.svg",
+      "layer": "motivation"
+    },
+    {
+      "type": "Assessment (logo)",
+      "file": "motivation_assessment_logo.svg",
+      "layer": "motivation",
+      "variant": "logo"
+    },
+    {
+      "type": "Constraint",
+      "file": "motivation_constraint.svg",
+      "layer": "motivation"
+    },
+    {
+      "type": "Constraint (logo)",
+      "file": "motivation_constraint_logo.svg",
+      "layer": "motivation",
+      "variant": "logo"
+    },
+    {
+      "type": "Driver",
+      "file": "motivation_driver.svg",
+      "layer": "motivation"
+    },
+    {
+      "type": "Driver (logo)",
+      "file": "motivation_driver_logo.svg",
+      "layer": "motivation",
+      "variant": "logo"
+    },
+    {
+      "type": "Goal",
+      "file": "motivation_goal.svg",
+      "layer": "motivation"
+    },
+    {
+      "type": "Goal (logo)",
+      "file": "motivation_goal_logo.svg",
+      "layer": "motivation",
+      "variant": "logo"
+    },
+    {
+      "type": "Meaning",
+      "file": "motivation_meaning.svg",
+      "layer": "motivation"
+    },
+    {
+      "type": "Meaning (logo)",
+      "file": "motivation_meaning_logo.svg",
+      "layer": "motivation",
+      "variant": "logo"
+    },
+    {
+      "type": "Outcome",
+      "file": "motivation_outcome.svg",
+      "layer": "motivation"
+    },
+    {
+      "type": "Outcome (logo)",
+      "file": "motivation_outcome_logo.svg",
+      "layer": "motivation",
+      "variant": "logo"
+    },
+    {
+      "type": "Principle",
+      "file": "motivation_principle.svg",
+      "layer": "motivation"
+    },
+    {
+      "type": "Principle (logo)",
+      "file": "motivation_principle_logo.svg",
+      "layer": "motivation",
+      "variant": "logo"
+    },
+    {
+      "type": "Requirement",
+      "file": "motivation_requirement.svg",
+      "layer": "motivation"
+    },
+    {
+      "type": "Requirement (logo)",
+      "file": "motivation_requirement_logo.svg",
+      "layer": "motivation",
+      "variant": "logo"
+    },
+    {
+      "type": "Stakeholder",
+      "file": "motivation_stakeholder.svg",
+      "layer": "motivation"
+    },
+    {
+      "type": "Stakeholder (logo)",
+      "file": "motivation_stakeholder_logo.svg",
+      "layer": "motivation",
+      "variant": "logo"
+    },
+    {
+      "type": "Value",
+      "file": "motivation_value.svg",
+      "layer": "motivation"
+    },
+    {
+      "type": "Value (logo)",
+      "file": "motivation_value_logo.svg",
+      "layer": "motivation",
+      "variant": "logo"
+    },
+    {
+      "type": "Grouping",
+      "file": "other_grouping.svg",
+      "layer": "other"
+    },
+    {
+      "type": "Grouping (logo)",
+      "file": "other_grouping_logo.svg",
+      "layer": "other",
+      "variant": "logo"
+    },
+    {
+      "type": "Location",
+      "file": "other_location.svg",
+      "layer": "other"
+    },
+    {
+      "type": "Location (logo)",
+      "file": "other_location_logo.svg",
+      "layer": "other",
+      "variant": "logo"
+    },
+    {
+      "type": "Distribution Network",
+      "file": "physical_distribution_network.svg",
+      "layer": "physical"
+    },
+    {
+      "type": "Distribution Network (logo)",
+      "file": "physical_distribution_network_logo.svg",
+      "layer": "physical",
+      "variant": "logo"
+    },
+    {
+      "type": "Equipment",
+      "file": "physical_equipment.svg",
+      "layer": "physical"
+    },
+    {
+      "type": "Equipment (logo)",
+      "file": "physical_equipment_logo.svg",
+      "layer": "physical",
+      "variant": "logo"
+    },
+    {
+      "type": "Facility",
+      "file": "physical_facility.svg",
+      "layer": "physical"
+    },
+    {
+      "type": "Facility (logo)",
+      "file": "physical_facility_logo.svg",
+      "layer": "physical",
+      "variant": "logo"
+    },
+    {
+      "type": "Material",
+      "file": "physical_material.svg",
+      "layer": "physical"
+    },
+    {
+      "type": "Material (logo)",
+      "file": "physical_material_logo.svg",
+      "layer": "physical",
+      "variant": "logo"
+    },
+    {
+      "type": "Capability",
+      "file": "strategy_capability.svg",
+      "layer": "strategy"
+    },
+    {
+      "type": "Capability (logo)",
+      "file": "strategy_capability_logo.svg",
+      "layer": "strategy",
+      "variant": "logo"
+    },
+    {
+      "type": "Course Of Action",
+      "file": "strategy_course_of_action.svg",
+      "layer": "strategy"
+    },
+    {
+      "type": "Course Of Action (logo)",
+      "file": "strategy_course_of_action_logo.svg",
+      "layer": "strategy",
+      "variant": "logo"
+    },
+    {
+      "type": "Resource",
+      "file": "strategy_resource.svg",
+      "layer": "strategy"
+    },
+    {
+      "type": "Resource (logo)",
+      "file": "strategy_resource_logo.svg",
+      "layer": "strategy",
+      "variant": "logo"
+    },
+    {
+      "type": "Value Stream",
+      "file": "strategy_value_stream.svg",
+      "layer": "strategy"
+    },
+    {
+      "type": "Value Stream (logo)",
+      "file": "strategy_value_stream_logo.svg",
+      "layer": "strategy",
+      "variant": "logo"
+    },
+    {
+      "type": "Artifact",
+      "file": "technology_artifact.svg",
+      "layer": "technology"
+    },
+    {
+      "type": "Artifact (logo)",
+      "file": "technology_artifact_logo.svg",
+      "layer": "technology",
+      "variant": "logo"
+    },
+    {
+      "type": "Communication Network",
+      "file": "technology_communication_network.svg",
+      "layer": "technology"
+    },
+    {
+      "type": "Communication Network (logo)",
+      "file": "technology_communication_network_logo.svg",
+      "layer": "technology",
+      "variant": "logo"
+    },
+    {
+      "type": "Device",
+      "file": "technology_device.svg",
+      "layer": "technology"
+    },
+    {
+      "type": "Device (logo)",
+      "file": "technology_device_logo.svg",
+      "layer": "technology",
+      "variant": "logo"
+    },
+    {
+      "type": "Node",
+      "file": "technology_node.svg",
+      "layer": "technology"
+    },
+    {
+      "type": "Node (logo)",
+      "file": "technology_node_logo.svg",
+      "layer": "technology",
+      "variant": "logo"
+    },
+    {
+      "type": "Path",
+      "file": "technology_path.svg",
+      "layer": "technology"
+    },
+    {
+      "type": "Path (logo)",
+      "file": "technology_path_logo.svg",
+      "layer": "technology",
+      "variant": "logo"
+    },
+    {
+      "type": "System Software",
+      "file": "technology_system_software.svg",
+      "layer": "technology"
+    },
+    {
+      "type": "System Software (logo)",
+      "file": "technology_system_software_logo.svg",
+      "layer": "technology",
+      "variant": "logo"
+    },
+    {
+      "type": "Technology Collaboration",
+      "file": "technology_technology_collaboration.svg",
+      "layer": "technology"
+    },
+    {
+      "type": "Technology Collaboration (logo)",
+      "file": "technology_technology_collaboration_logo.svg",
+      "layer": "technology",
+      "variant": "logo"
+    },
+    {
+      "type": "Technology Event",
+      "file": "technology_technology_event.svg",
+      "layer": "technology"
+    },
+    {
+      "type": "Technology Event (logo)",
+      "file": "technology_technology_event_logo.svg",
+      "layer": "technology",
+      "variant": "logo"
+    },
+    {
+      "type": "Technology Function",
+      "file": "technology_technology_function.svg",
+      "layer": "technology"
+    },
+    {
+      "type": "Technology Function (logo)",
+      "file": "technology_technology_function_logo.svg",
+      "layer": "technology",
+      "variant": "logo"
+    },
+    {
+      "type": "Technology Interaction",
+      "file": "technology_technology_interaction.svg",
+      "layer": "technology"
+    },
+    {
+      "type": "Technology Interaction (logo)",
+      "file": "technology_technology_interaction_logo.svg",
+      "layer": "technology",
+      "variant": "logo"
+    },
+    {
+      "type": "Technology Interface",
+      "file": "technology_technology_interface.svg",
+      "layer": "technology"
+    },
+    {
+      "type": "Technology Interface (logo)",
+      "file": "technology_technology_interface_logo.svg",
+      "layer": "technology",
+      "variant": "logo"
+    },
+    {
+      "type": "Technology Process",
+      "file": "technology_technology_process.svg",
+      "layer": "technology"
+    },
+    {
+      "type": "Technology Process (logo)",
+      "file": "technology_technology_process_logo.svg",
+      "layer": "technology",
+      "variant": "logo"
+    },
+    {
+      "type": "Technology Service",
+      "file": "technology_technology_service.svg",
+      "layer": "technology"
+    },
+    {
+      "type": "Technology Service (logo)",
+      "file": "technology_technology_service_logo.svg",
+      "layer": "technology",
+      "variant": "logo"
+    }
+  ]
+}

@@ -226,6 +226,11 @@ voice: default           # default | male | female | a voice id  (default: defau
 #   ai: claude           # claude | codex
 #   fps: 30
 #   resolution: 1920x1080
+#   assets_dir: ./assets # folder of ready-made symbol SVGs + manifest.json;
+#                        # scenes load these real files (no --run-preparation)
+#   subject: generic     # subjects/<name>/ pack: design_patterns | archimate | togaf
+#                        # (drives scene guidance + helpers; see "Subjects & templates")
+#   template: default    # templates/<name>/ presentation scaffold (palette, top bar, ...)
 ---
 
 # Strategy Pattern
@@ -321,6 +326,39 @@ preferring SVG and falling back to JPG. The software-pattern generator
 (`auto_generate_patterns.py`) emits one that simply states no preparation is
 needed (those tutorials are code-only).
 
+### Static reference assets (`assets_dir`)
+
+If the artwork already exists on disk, skip the agentic preparation step
+entirely. Point `assets_dir:` at a folder containing the symbol files **plus a
+`manifest.json`**, and every scene prompt is handed those exact absolute file
+paths with a **mandatory** instruction to load them (`SVGMobject("…")` for SVG,
+`ImageMobject("…")` for raster) instead of inventing shapes. This path is fully
+deterministic — **no `--run-preparation`, no AI agent, no MCP, no network** — so
+it behaves identically at every `--effort` level (loading a named file is
+trivial even at `low`).
+
+```yaml
+assets_dir: ./assets        # relative to the storyboard file, or an absolute path
+```
+
+The `manifest.json` lists what's available (`{"symbols": [...]}`; each `file` is
+relative to `assets_dir`, an absolute path also works):
+
+```json
+{ "symbols": [
+  { "type": "Resource", "file": "strategy_resource.svg", "layer": "strategy" },
+  { "type": "Serving relationship", "file": "relationship_serving.svg", "layer": "relationship" }
+] }
+```
+
+For the most reliable results, **name the exact files a scene should use in that
+scene's description** (e.g. `strategy_resource.svg`) so the loader is
+unambiguous. `assets_dir` and `--run-preparation` compose: a successful
+preparation run sets the asset list for that build, otherwise `assets_dir`
+remains the fallback. The bundled
+[`assets/manifest.json`](assets/manifest.json) catalogs the full ArchiMate
+symbol set (per-layer element symbols, corner logos, and relationship symbols).
+
 ### Legacy format (still fully supported)
 
 The earlier, more explicit form keeps working unchanged — required front-matter,
@@ -390,6 +428,68 @@ provided and exists, those files are used as-is and AI scene generation is
 skipped entirely.
 
 ---
+
+## Subjects, templates & bulk generation
+
+The pipeline is one engine; everything topic- or look-specific is a small,
+file-discovered pack you drop in — **no edits to `video_generator/vgen/`**. See
+[`design_architecture.md`](design_architecture.md) for the full design.
+
+### Subjects (`subjects/<name>/`) — *what* you teach
+
+A **subject pack** bundles the per-topic knowledge: the bulk-driver storyboard
+prompt + exemplar, the scene-prompt notation guidance, and any scene-render
+helper modules (appended into that build's `_common.py`, so a build carries only
+its own subject's helpers). Select one with `subject:` in the front-matter
+(default `generic`). Shipped packs:
+
+- **`design_patterns`** — code-only tutorials (uses the generic UML helpers).
+- **`archimate`** — loads the real ArchiMate `*_logo.svg` symbols and adds
+  `archi_element` + the relationship-arrow helpers.
+- **`togaf`** — ADM process-flow tutorials.
+
+Add a subject by dropping a folder (nothing else to wire up):
+
+```
+subjects/<name>/
+  subject.yaml          # aliases, scene_helpers, scene_guidance, asset_source,
+                        # csv, naming, cli_flags, storyboard prompt/exemplar refs
+  storyboard_prompt.md  # bulk-driver prompt — {{NAME}} {{CATEGORY}} {{TITLE}} {{EXEMPLAR}}
+  exemplars/default.md
+  helpers/<name>.py     # optional Manim helpers, composed into the build's _common.py
+```
+
+### Templates (`templates/<name>/`) — *how* it looks
+
+A **template** is the presentation scaffold every scene is built on: the palette,
+the top `title_bar`, the `tech_background` grid, typography, code cards, and the
+rest of the shared helper library. It is `templates/<name>/_core.py` plus the two
+orientation deltas `_landscape.py` / `_portrait.py` (frame + size constants).
+Select one with `template:` (default `default`). To make a new look, copy
+`templates/default/` to `templates/<name>/`, change the palette/sizes, and set
+`template: <name>` in a storyboard (or a subject pack's `template:`). At build
+time the chosen core + orientation delta + the active subject's helpers are
+composed into the single `_common.py` each scene imports.
+
+### Bulk generation (`auto_generate.py`)
+
+One cron-friendly driver works a CSV queue (`no,name,category,status,…`),
+generates a storyboard per row with the subject's prompt, and launches each build
+in its own console. Pick the subject explicitly, or route each row by category:
+
+```bash
+# design-pattern queue (every row -> design_patterns pack)
+python auto_generate.py --subject design_patterns
+# enterprise-architecture queue (rows routed to archimate/togaf by category)
+python auto_generate.py --csv enterprise_architecture_todo.csv
+# helper modes
+python auto_generate.py --subject design_patterns --status
+python auto_generate.py --subject design_patterns --start 5
+python auto_generate.py --csv enterprise_architecture_todo.csv --reset-stuck
+```
+
+`auto_generate_patterns.py` and `auto_generate_ea.py` remain as thin shims that
+forward to `auto_generate.py`, so existing cron entries keep working.
 
 ## Usage examples
 
@@ -673,7 +773,14 @@ VIDEO_GENERATOR_NETWORK_TESTS=1 .venv/bin/python -m pytest -m network
 
 ## Notes on `_common.py`
 
-The bundled `_common.py` honors `MANIM_AUDIO_DIR` when computing per-scene target
+Each build's `scenes_<orient>/_common.py` is **composed** at build time, not copied
+from one file: the selected template's `templates/<template>/_core.py` (the theme
+palette + shared helpers) has its orientation delta `_<orient>.py` (frame + sizes)
+spliced in, and the active subject pack's helper modules are appended. So
+`_common.py` is the single module every scene imports, carrying only the template
+and subject the build actually uses. (See "Subjects, templates & bulk generation".)
+
+The composed `_common.py` honors `MANIM_AUDIO_DIR` when computing per-scene target
 durations:
 
 ```python
