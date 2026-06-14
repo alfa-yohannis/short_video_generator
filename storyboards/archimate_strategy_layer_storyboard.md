@@ -21,10 +21,11 @@ Tidak perlu MCP/Archi. Ikon tipe elemen tersedia sebagai berkas SVG `_logo` di f
 CARA MENGGAMBAR (strict — konsisten di semua scene dan semua tingkat effort):
 
 ELEMEN = kotak (RoundedRectangle) digambar dengan Manim:
-- Warna isi kotak = warna native layer-nya: Strategy = oranye/kuning keemasan; Business = kuning; Application = biru muda. (Aksen panel/teks boleh memakai variasi warna Strategy.)
+- Warna isi kotak = warna native layer-nya: Strategy = oranye/kuning keemasan; Motivation = UNGU; Business = kuning; Application = biru muda. (Aksen panel/teks boleh memakai variasi warna Strategy.)
 - Nama elemen sebagai teks DI DALAM kotak (jangan sampai terpotong).
 - Ikon tipe dimuat dari berkas `_logo.svg` aslinya via `SVGMobject("<path>")`, diskalakan KECIL, diletakkan di POJOK KANAN ATAS kotak dengan margin kecil, dengan margin kanan sedikit lebih besar — TIDAK menutupi nama/label. JANGAN menggambar/mengarang ikon sendiri dan JANGAN mewarnai ulang logo (tampilkan apa adanya).
 - Berkas logo: `strategy_resource_logo.svg`, `strategy_capability_logo.svg`, `strategy_course_of_action_logo.svg`, `strategy_value_stream_logo.svg`, `business_business_process_logo.svg`, `application_application_component_logo.svg`.
+- Berkas logo lintas layer (koneksi ke Motivation Layer, scene 05): `motivation_driver_logo.svg`, `motivation_goal_logo.svg`.
 
 RELASI = JANGAN memuat SVG. Gambar dengan metode internal Manim (`Line` / `DashedLine` + bentuk kepala dari `Polygon`/`Triangle`/`Dot`) agar bisa menyesuaikan posisi, panjang, dan arah antar kotak. Pola garis + bentuk kepala sesuai notasi ArchiMate:
 - Assignment: garis SOLID; bulatan TERISI (`Dot`) di ujung sumber; kepala panah TERISI di ujung target.
@@ -53,13 +54,20 @@ Hubungkan kotak elemen Strategy dengan RELASI yang DIGAMBAR Manim (lihat pola di
 ## 04_keterkaitan_antar_layer (~24s)
 Capability (`strategy_capability_logo.svg`) (kotak Strategy) DI-REALISASIKAN oleh elemen layer bawah: Business Process (kotak Business kuning, `business_business_process_logo.svg`) dan Application Component (kotak Application biru, `application_application_component_logo.svg`). Relasi realization DIGAMBAR Manim: garis TITIK-TITIK dengan kepala SEGITIGA KOSONG mengarah ke Capability. Tegaskan: Strategy = "mengapa/arah", layer lain = "bagaimana/pelaksanaan".
 
-## 05_contoh_kasus (~36s)
+## 05_keterkaitan_motivation (~22s)
+Hubungkan Strategy Layer ke ATAS dengan Motivation Layer — "mengapa" di balik strateginya (melengkapi scene sebelumnya yang turun ke Business/Application). Tiap kotak = warna native layer-nya + nama di dalam + logo di pojok kanan atas; semua relasi DIGAMBAR Manim (lihat pola di Preparation):
+- Motivation Driver (kotak UNGU, `motivation_driver_logo.svg`) "Pendapatan turun" —influence→ Motivation Goal (kotak UNGU, `motivation_goal_logo.svg`) "Tingkatkan pendapatan" (garis PUTUS-PUTUS; kepala panah TERBUKA): pemicu memotivasi tujuan.
+- Strategy Course of Action (kotak oranye, `strategy_course_of_action_logo.svg`) "Buka cabang baru" —realization→ Goal (garis TITIK-TITIK; kepala SEGITIGA KOSONG mengarah ke Goal): rencana mewujudkan tujuan.
+- Strategy Capability (kotak oranye, `strategy_capability_logo.svg`) "Penjualan online" —realization→ Goal (garis TITIK-TITIK; kepala SEGITIGA KOSONG): kemampuan mewujudkan tujuan.
+Tegaskan: elemen Strategy MEWUJUDKAN tujuan di Motivation Layer — Motivation = alasan/arah ("mengapa"), Strategy = cara tingkat tinggi mencapainya.
+
+## 06_contoh_kasus (~32s)
 Mini-diagram restoran dibangun bertahap; semua kotak elemen + relasi DIGAMBAR Manim:
 Resource (`strategy_resource_logo.svg`) "Armada kurir" + "Aplikasi POS" —assignment→ Capability (`strategy_capability_logo.svg`) "Layanan delivery" —serving→ Value Stream (`strategy_value_stream_logo.svg`) "Pesan lalu antar"; Course of Action "Gandeng kurir mitra" —influence→ Capability (`strategy_course_of_action_logo.svg`). Pakai pola garis + kepala sesuai aturan.
 
-## 06_kesimpulan (~16s)
+## 07_kesimpulan (~16s)
 Tampilkan lagi keempat kotak elemen Strategy (logo di pojok kanan atas), 
-- Resource (`strategy_resource_logo.svg`) "Resource"£
+- Resource (`strategy_resource_logo.svg`) "Resource"
 - Capability (`strategy_capability_logo.svg`) "Capability"
 - Course of Action (`strategy_course_of_action_logo.svg`) "Course of Action"
 - Value Stream (`strategy_value_stream_logo.svg`) "Value Stream"
