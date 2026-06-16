@@ -6,5 +6,5 @@ no,name,category,status,start_time,end_time
 5,ArchiMate Application Layer,ArchiMate Layer,done,2026-06-16 10:24:20,2026-06-16 11:33:13
 6,ArchiMate Technology Layer,ArchiMate Layer,done,2026-06-16 10:29:04,2026-06-16 11:50:10
 7,ArchiMate Implementation Migration Layer,ArchiMate Layer,done,2026-06-16 16:00:01,2026-06-16 17:23:13
-8,ArchiMate Relationships,ArchiMate Core,,,
+8,ArchiMate Relationships,ArchiMate Core,done,2026-06-16 21:00:02,2026-06-16 22:40:02
 9,ArchiMate Viewpoints,ArchiMate Core,,,

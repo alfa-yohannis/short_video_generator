@@ -228,9 +228,10 @@ voice: default           # default | male | female | a voice id  (default: defau
 #   resolution: 1920x1080
 #   assets_dir: ./assets # folder of ready-made symbol SVGs + manifest.json;
 #                        # scenes load these real files (no --run-preparation)
-#   subject: generic     # subjects/<name>/ pack: design_patterns | archimate | togaf
+#   subject: generic     # subjects/<name>/ pack: design_patterns | archimate | togaf | python_101
 #                        # (drives scene guidance + helpers; see "Subjects & templates")
-#   template: default    # templates/<name>/ presentation scaffold (palette, top bar, ...)
+#   template: default    # templates/<name>/ presentation scaffold (e.g. python_dark);
+#                        # resolved repo-root templates/ first, then bundled
 ---
 
 # Strategy Pattern
@@ -447,6 +448,9 @@ its own subject's helpers). Select one with `subject:` in the front-matter
 - **`archimate`** — loads the real ArchiMate `*_logo.svg` symbols and adds
   `archi_element` + the relationship-arrow helpers.
 - **`togaf`** — ADM process-flow tutorials.
+- **`python_101`** — beginner Python tutorials. Defaults to the dark
+  `python_dark` template (typewriter typing animations) and adds `console_panel`
+  / `repl` helpers for showing program output.
 
 Add a subject by dropping a folder (nothing else to wire up):
 
@@ -463,13 +467,35 @@ subjects/<name>/
 
 A **template** is the presentation scaffold every scene is built on: the palette,
 the top `title_bar`, the `tech_background` grid, typography, code cards, and the
-rest of the shared helper library. It is `templates/<name>/_core.py` plus the two
+rest of the shared helper library. It is `<name>/_core.py` plus the two
 orientation deltas `_landscape.py` / `_portrait.py` (frame + size constants).
-Select one with `template:` (default `default`). To make a new look, copy
-`templates/default/` to `templates/<name>/`, change the palette/sizes, and set
-`template: <name>` in a storyboard (or a subject pack's `template:`). At build
-time the chosen core + orientation delta + the active subject's helpers are
-composed into the single `_common.py` each scene imports.
+Select one with `template:` (default `default`).
+
+A template name is resolved by searching two locations, **most specific first**:
+
+1. the **repo-root `templates/<name>/`** — your project-local templates, the same
+   drop-in-a-folder model as `subjects/` and `profiles/`;
+2. the **bundled `video_generator/templates/<name>/`** — where the built-in
+   `default` lives.
+
+So a repo-root template overrides a bundled one of the same name, and a brand-new
+look is just a folder you drop in — no code change. An unknown name falls back to
+`default`. To make a new look, copy `video_generator/templates/default/` to
+`templates/<name>/` at the repo root, change the palette/sizes, and set
+`template: <name>` in a storyboard (or a subject pack's `template:`). A template
+may also ship its own `assets/` folder, merged into the build's `assets/` on top
+of the shared fonts/logo. At build time the chosen core + orientation delta + the
+active subject's helpers are composed into the single `_common.py` each scene
+imports.
+
+Shipped repo-root template:
+
+- **`python_dark`** — a dark code-editor theme (near-black canvas, Python
+  blue/yellow accents, window-framed code cards) with **typewriter typing
+  animations**: `type_text(mob, cursor=caret())` types any text glyph-by-glyph,
+  and `type_code(self, code_card(src))` reveals the editor window then types the
+  syntax-highlighted code character by character. Used by the `python_101`
+  subject; set `template: python_dark` to use it for any storyboard.
 
 ### Bulk generation (`auto_generate.py`)
 

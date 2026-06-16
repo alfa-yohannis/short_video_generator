@@ -9,9 +9,12 @@ Layout on disk::
 
     short_video_generator/        <- REPO_ROOT
     ├── .venv/                     <- VENV_DIR (auto-created on first run)
+    ├── templates/                 <- USER_TEMPLATES_DIR (project-local templates)
+    ├── subjects/                  <- SUBJECTS_DIR (subject packs)
+    ├── profiles/                  <- PROFILES_DIR (preparation profiles)
     └── video_generator/           <- GENERATOR_ROOT
         ├── generate_video.py       <- thin entry point
-        ├── templates/              <- TEMPLATES_DIR (_common.py, fonts, skeleton)
+        ├── templates/              <- TEMPLATES_DIR (bundled templates, fonts, skeleton)
         └── vgen/                   <- this package
 """
 
@@ -26,6 +29,13 @@ GENERATOR_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATES_DIR = GENERATOR_ROOT / "templates"
 REPO_ROOT = GENERATOR_ROOT.parent
 REQUIREMENTS = GENERATOR_ROOT / "requirements.txt"
+
+# Project-local presentation templates live at the repo root (``templates/<name>/``),
+# the same drop-in-a-folder model as ``subjects/`` and ``profiles/``. A template
+# here wins over a bundled one of the same name, so you can override ``default``
+# or add a brand-new look (e.g. a dark code theme) with no code change. See
+# vgen/scenes.py:resolve_template_dir.
+USER_TEMPLATES_DIR = REPO_ROOT / "templates"
 
 # A project-local virtual environment at the repo root. The bootstrap step
 # creates it on first run and re-execs the program inside it (see bootstrap.py),
@@ -123,7 +133,10 @@ SUBJECTS_DIR = REPO_ROOT / "subjects"
 # typography, helpers) plus its orientation deltas — is a folder
 # ``templates/<name>/`` holding _core.py + _landscape.py + _portrait.py. A
 # storyboard's ``template:`` key (or a subject pack's ``template:``) selects one,
-# defaulting to ``templates/default/``. See vgen/scenes.py:materialize_dir.
+# defaulting to ``default``. It is resolved by searching the repo-root
+# ``templates/`` (USER_TEMPLATES_DIR) first, then the bundled TEMPLATES_DIR, so a
+# project-local template overrides a bundled one. See
+# vgen/scenes.py:resolve_template_dir / materialize_dir.
 DEFAULT_TEMPLATE = "default"
 
 # --- YouTube field limits --------------------------------------------------

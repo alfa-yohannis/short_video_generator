@@ -37,6 +37,27 @@ if TYPE_CHECKING:  # only for type hints — avoids a runtime import cycle
     from .renderer import SceneValidator
 
 
+def resolve_template_dir(name: str, orient: str) -> Optional[Path]:
+    """Locate the presentation-template folder for ``name`` + ``orient``.
+
+    A valid template folder holds both ``_core.py`` and the orientation delta
+    ``_<orient>.py``. The search order is, most specific first:
+
+      1. the repo-root ``templates/<name>/`` (USER_TEMPLATES_DIR) — project-local
+         templates you drop in, which override a bundled template of the same name;
+      2. the bundled ``video_generator/templates/<name>/`` (TEMPLATES_DIR).
+
+    Returns the first folder that has both files, else ``None``. This mirrors the
+    drop-in-a-folder model of ``subjects/`` and ``profiles/`` so a new look is a
+    data addition, not a code change.
+    """
+    for base in (config.USER_TEMPLATES_DIR, config.TEMPLATES_DIR):
+        tdir = base / name
+        if (tdir / "_core.py").exists() and (tdir / f"_{orient}.py").exists():
+            return tdir
+    return None
+
+
 class SceneSynthesizer:
     """Creates and repairs Manim scene files for a storyboard.
 
@@ -80,8 +101,10 @@ class SceneSynthesizer:
         #   1. the chosen template (templates/<template>/): its orientation-agnostic
         #      CORE (_core.py) with the orientation delta (_<orient>.py) spliced in
         #      at the ORIENTATION_DELTA marker. The template is the storyboard's
-        #      `template:` (else the subject's, else DEFAULT_TEMPLATE); an unknown
-        #      name falls back to the default so a build never loses its scaffold.
+        #      `template:` (else the subject's, else DEFAULT_TEMPLATE) and is looked
+        #      up by resolve_template_dir (repo-root templates/ first, then the
+        #      bundled ones); an unknown name falls back to the default so a build
+        #      never loses its scaffold.
         #   2. the ACTIVE subject pack's scene helpers (e.g. ArchiMate's
         #      archi_element / arrows) — so design-pattern builds carry no ArchiMate
         #      code and the scene prompt (which injects _common verbatim) shows only
@@ -91,16 +114,15 @@ class SceneSynthesizer:
         pack = get_subject(getattr(storyboard, "subject", "generic"))
         tmpl = (getattr(storyboard, "template", "") or pack.template
                 or config.DEFAULT_TEMPLATE)
-        tdir = config.TEMPLATES_DIR / tmpl
-        core_file, delta_file = tdir / "_core.py", tdir / f"_{orient}.py"
-        if not (core_file.exists() and delta_file.exists()):
+        tdir = resolve_template_dir(tmpl, orient)
+        if tdir is None:
             if tmpl != config.DEFAULT_TEMPLATE:
                 progress.log(f"  template '{tmpl}' not found; using "
                              f"'{config.DEFAULT_TEMPLATE}'.")
-            tdir = config.TEMPLATES_DIR / config.DEFAULT_TEMPLATE
-            core_file, delta_file = tdir / "_core.py", tdir / f"_{orient}.py"
-        if not (core_file.exists() and delta_file.exists()):
+            tdir = resolve_template_dir(config.DEFAULT_TEMPLATE, orient)
+        if tdir is None:
             return target
+        core_file, delta_file = tdir / "_core.py", tdir / f"_{orient}.py"
         composed = core_file.read_text(encoding="utf-8").replace(
             "# <<ORIENTATION_DELTA>>", delta_file.read_text(encoding="utf-8"))
         target_common = target / "_common.py"
@@ -116,6 +138,14 @@ class SceneSynthesizer:
             # Merge-copy so new template assets (e.g. logo/) land in existing
             # build dirs too, not only freshly-created ones.
             shutil.copytree(assets_src, output / "assets", dirs_exist_ok=True)
+
+        # Per-template assets: a template folder may ship its own ``assets/``
+        # (a custom background image, logo, …). Merge it AFTER the shared bundle
+        # so a template can override a shared file; the bundled fonts/logo above
+        # always land, so any template still has them.
+        tmpl_assets = tdir / "assets"
+        if tmpl_assets.is_dir():
+            shutil.copytree(tmpl_assets, output / "assets", dirs_exist_ok=True)
 
         # Stage the storyboard's declared reference assets (assets_dir:) into the
         # build's assets/ too. The scene prompt injects each asset's ABSOLUTE

@@ -34,7 +34,8 @@ from vgen.preparation import (
     is_noop_preparation, load_manifest, mcp_host_port, port_open,
 )
 from vgen.refine import StoryboardRefiner
-from vgen.scenes import SceneSynthesizer
+from vgen.scenes import SceneSynthesizer, resolve_template_dir
+from vgen.subjects import get_subject
 from vgen.storyboard import StoryboardParser, parse_duration_spec
 from vgen.tts import (
     EdgeTtsEngine, GeminiQuotaError, GeminiTtsEngine, create_tts_engine,
@@ -1934,3 +1935,69 @@ def test_ensure_server_none_when_no_port(tmp_path):
     cfg.write_text('{"mcpServers": {"archi": {"url": "http://x"}}}', encoding="utf-8")
     # No explicit port -> introspection returns None -> ensure short-circuits True.
     assert prep_mod.ensure_server(cfg, "archi", {"command": "x"}) is True
+
+
+# --- Template resolution (repo-root templates/ overrides bundled) ----------
+
+def _make_template(base, name, orients=("landscape", "portrait")):
+    """Create a minimal valid template folder (_core.py + orientation deltas)."""
+    tdir = base / name
+    tdir.mkdir(parents=True, exist_ok=True)
+    (tdir / "_core.py").write_text("# core\n", encoding="utf-8")
+    for o in orients:
+        (tdir / f"_{o}.py").write_text("# delta\n", encoding="utf-8")
+    return tdir
+
+
+def test_resolve_template_prefers_user_dir(tmp_path, monkeypatch):
+    user, bundled = tmp_path / "user", tmp_path / "bundled"
+    monkeypatch.setattr(config, "USER_TEMPLATES_DIR", user)
+    monkeypatch.setattr(config, "TEMPLATES_DIR", bundled)
+    user_t = _make_template(user, "neon")
+    _make_template(bundled, "neon")          # same name in the bundled dir
+    # Repo-root (user) template wins over a bundled one of the same name.
+    assert resolve_template_dir("neon", "landscape") == user_t
+
+
+def test_resolve_template_falls_back_to_bundled(tmp_path, monkeypatch):
+    user, bundled = tmp_path / "user", tmp_path / "bundled"
+    monkeypatch.setattr(config, "USER_TEMPLATES_DIR", user)
+    monkeypatch.setattr(config, "TEMPLATES_DIR", bundled)
+    bundled_t = _make_template(bundled, "default")   # only the bundled dir has it
+    assert resolve_template_dir("default", "portrait") == bundled_t
+
+
+def test_resolve_template_requires_matching_orientation_delta(tmp_path, monkeypatch):
+    user = tmp_path / "user"
+    monkeypatch.setattr(config, "USER_TEMPLATES_DIR", user)
+    monkeypatch.setattr(config, "TEMPLATES_DIR", tmp_path / "none")
+    _make_template(user, "landscape_only", orients=("landscape",))
+    assert resolve_template_dir("landscape_only", "landscape") is not None
+    # No _portrait.py -> not a valid template for portrait.
+    assert resolve_template_dir("landscape_only", "portrait") is None
+
+
+def test_resolve_template_unknown_returns_none(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "USER_TEMPLATES_DIR", tmp_path / "user")
+    monkeypatch.setattr(config, "TEMPLATES_DIR", tmp_path / "bundled")
+    assert resolve_template_dir("does_not_exist", "landscape") is None
+
+
+def test_shipped_python_dark_template_resolves():
+    """The bundled python_dark template lives at the repo root and is complete."""
+    for orient in ("landscape", "portrait"):
+        tdir = resolve_template_dir("python_dark", orient)
+        assert tdir == config.USER_TEMPLATES_DIR / "python_dark"
+        assert (tdir / "_core.py").exists()
+        assert (tdir / f"_{orient}.py").exists()
+    core = (config.USER_TEMPLATES_DIR / "python_dark" / "_core.py").read_text()
+    assert "def type_code" in core and "def type_text" in core   # typing helpers
+
+
+def test_python_101_subject_defaults_to_python_dark():
+    pack = get_subject("python_101")
+    assert pack.name == "python_101"
+    assert pack.template == "python_dark"          # subject selects the dark theme
+    helpers = dict(pack.helper_sources())
+    assert "python_console.py" in helpers
+    assert "def console_panel" in helpers["python_console.py"]

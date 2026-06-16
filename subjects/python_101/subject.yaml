@@ -1,0 +1,40 @@
+name: python_101
+display_name: Python Programming 101
+# Bulk-driver routing: a CSV row whose category/name contains any of these picks
+# this pack (see vgen/subjects.py:resolve_for_category).
+aliases: [python, python_101, python basics, programming basics]
+
+# Default presentation template for this subject: the repo-root
+# templates/python_dark/ scaffold (dark editor theme + typewriter typing
+# animations). A storyboard's explicit `template:` still overrides this.
+template: python_dark
+
+# --- scene generation -------------------------------------------------------
+# Scene render helpers appended into each build's _common.py (see
+# vgen/scenes.py:materialize_dir). Only this subject's builds carry them.
+scene_helpers:
+  - helpers/python_console.py
+
+# Injected into the scene-generation prompt for this subject. Steers the AI to
+# use the python_dark template's typing animation + the console helpers, and to
+# keep examples beginner-friendly Python.
+scene_guidance: |
+  PYTHON 101 RENDERING — code-only beginner tutorials on the dark `python_dark` template. Use the `_common` helpers so the result is consistent at EVERY --effort level:
+  - Code: build it with `code_card(src, language="python")` and REVEAL it with the typewriter effect via `type_code(self, card)` — the editor window appears at once, then the code is typed in character by character (this typing animation is the template's signature; prefer it over Write/Create for code).
+  - Prose: type short lines/labels with `type_text(body_text("..."), cursor=caret())` so they read like live typing; for inline code use `mono_text("...")`. Use plain `body_text` / `bullet_list` for longer explanations.
+  - Output: show what the program PRINTS with `console_panel([("hi 0", OK), ...], title="python3 demo.py")`, and interactive snippets with `repl([("2 + 3", "5"), ("len('abc')", "3")])`. Pair every code_card that prints with its output panel.
+  - Keep one short, concrete running example per video; flow concept -> minimal example -> run it (output) -> a common beginner pitfall (DANGER) -> the fix (OK) -> recap.
+  - Semantic colors: DANGER for bugs/wrong output, OK for correct results, HIGHLIGHT for the current focus, PRIMARY for titles, ACCENT for labels. Keep code short (fits a card) and idiomatic Python 3.
+asset_source:
+  type: none
+
+# --- bulk driver (auto_generate.py) -----------------------------------------
+csv: python_101_todo.csv
+naming:
+  title_suffix: ""                 # front-matter title = slug (no suffix)
+  storyboard_suffix: _python_storyboard.md
+storyboard:
+  prompt_file: storyboard_prompt.md
+  exemplar_file: exemplars/default.md
+cli_flags: [--tts, edge, --ai-cli, claude, --effort, xhigh,
+            --refine-storyboard, --validate-scenes, --force]
