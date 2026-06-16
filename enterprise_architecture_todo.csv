@@ -1,4 +1,10 @@
 no,name,category,status,start_time,end_time
-1,ArchiMate Strategy Layer,ArchiMate Layer,,,
-2,ADM Preliminary Phase,TOGAF ADM Phase,done,2026-06-12 06:15:37,2026-06-12 07:55:32
-3,ADM Phase A Architecture Vision,TOGAF ADM Phase,,,
+1,ArchiMate Introduction,ArchiMate Core,done,,
+2,ArchiMate Motivation Layer,ArchiMate Layer,done,,
+3,ArchiMate Strategy Layer,ArchiMate Layer,done,,
+4,ArchiMate Business Layer,ArchiMate Layer,done,2026-06-16 05:00:02,2026-06-16 06:08:38
+5,ArchiMate Application Layer,ArchiMate Layer,done,2026-06-16 10:24:20,2026-06-16 11:33:13
+6,ArchiMate Technology Layer,ArchiMate Layer,done,2026-06-16 10:29:04,2026-06-16 11:50:10
+7,ArchiMate Implementation Migration Layer,ArchiMate Layer,done,2026-06-16 16:00:01,2026-06-16 17:23:13
+8,ArchiMate Relationships,ArchiMate Core,,,
+9,ArchiMate Viewpoints,ArchiMate Core,,,

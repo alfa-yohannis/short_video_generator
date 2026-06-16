@@ -15,8 +15,8 @@ no,name,category,status,start_time,end_time
 14,Decorator,GoF Structural,done,2026-06-14 07:49:09,2026-06-14 09:09:42
 15,Facade,GoF Structural,done,2026-06-14 01:02:06,2026-06-14 02:20:12
 16,Flyweight,GoF Structural,done,2026-06-14 16:36:56,2026-06-14 17:47:41
-17,Proxy,GoF Structural,,,
-18,Chain of Responsibility,GoF Behavioral,,,
+17,Proxy,GoF Structural,done,2026-06-15 01:00:01,2026-06-15 01:58:10
+18,Chain of Responsibility,GoF Behavioral,done,2026-06-15 05:00:01,2026-06-15 06:02:27
 19,Command,GoF Behavioral,,,
 20,Interpreter,GoF Behavioral,,,
 21,Iterator,GoF Behavioral,,,

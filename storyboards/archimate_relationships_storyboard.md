@@ -9,97 +9,105 @@ length: 2-3 minutes
 
 # ArchiMate Relationships
 
-Video tutorial animasi singkat tentang Relationships (Connectors) pada bahasa enterprise-architecture ArchiMate — garis-garis yang menghubungkan antar elemen dan memberi makna pada model. Audiens pemula. Gaya: bersih, satu ide per layar, transisi halus.
+A short animated tutorial video about Relationships (Connectors) in the ArchiMate enterprise-architecture language — the lines that connect elements and give the model meaning. Audience: beginners. Style: clean, one idea per screen, smooth transitions.
 
-Versi bahasa Inggris seluruhnya bahasa Inggris (termasuk contoh). Versi bahasa Indonesia seluruhnya bahasa Indonesia, kecuali nama relationship dan nama tipe elemen ArchiMate (kosakata standar notasi).
+The English version is entirely in English (including ALL displayed and spoken restaurant examples/labels). The Indonesian version is entirely in Indonesian. The ONLY exception: STANDARD ArchiMate VOCABULARY — terms that the ArchiMate notation itself uses in English — stays the same (in English) in BOTH versions. This covers:
+- Product names: "ArchiMate", "The Open Group".
+- Layer names: Strategy, Business, Application, Technology, Motivation, Implementation & Migration.
+- Aspect names: Active Structure, Behavior, Passive Structure, Motivation.
+- Element type names: e.g. Capability, Business Process, Application Component, Node, Goal, Work Package.
+- Relationship names: e.g. Realization, Serving, Assignment, Influence, Composition, Association.
+ALL other words (ordinary titles, subtitles, narration, explanatory phrases, and restaurant example labels) MUST follow the video's language.
 
-Contoh konsisten di SELURUH scene: konteks RESTORAN (proses dapur, pelayan, sistem pemesanan online, layanan delivery).
+MANDATORY LANGUAGE RULE (to avoid mixing): every displayed example label is written as an `ID "…" | EN "…"` pair. The English version may use ONLY the EN text; the Indonesian version may use ONLY the ID text. NEVER show an Indonesian word in the English video, and vice versa — including text inside boxes, line/relationship labels, titles, subtitles, and the spoken narration.
+
+Consistent example across ALL scenes: a RESTAURANT context (kitchen process, waiter, online ordering system, delivery service).
 
 # Preparation
-Tidak perlu MCP/Archi. Ikon tipe elemen tersedia sebagai berkas SVG `_logo` di folder pada `assets_dir` (front-matter) beserta `manifest.json`; generator otomatis menyuntikkan daftar berkas + path absolutnya ke setiap scene.
+No MCP/Archi needed. Element-type icons are available as `_logo` SVG files in the folder at `assets_dir` (front-matter) together with `manifest.json`; the generator automatically injects the file list + their absolute paths into every scene.
 
-PENTING — fokus video ini adalah RELATIONSHIPS (connectors), yaitu GARIS antar elemen, BUKAN elemen itu sendiri. Relationship TIDAK punya berkas `_logo.svg` dan TIDAK PERNAH dimuat dari SVG. Setiap relationship SELALU DIGAMBAR dengan Manim (`Line` / `DashedLine` / `DottedLine` + bentuk kepala/ujung dari `Polygon` / `Triangle` / `Dot`). JANGAN merujuk logo relationship apa pun. Logo SVG hanya dipakai untuk kotak demo kecil yang dihubungkan oleh garis.
+IMPORTANT — the focus of this video is RELATIONSHIPS (connectors), i.e. the LINES between elements, NOT the elements themselves. A relationship has NO `_logo.svg` file and is NEVER loaded from SVG. Every relationship is ALWAYS DRAWN with Manim (`Line` / `DashedLine` / `DottedLine` + head/end shapes from `Polygon` / `Triangle` / `Dot`). DO NOT reference any relationship logo. SVG logos are only used for the small demo boxes that the lines connect.
 
-CARA MENGGAMBAR (strict — konsisten di semua scene dan semua tingkat effort):
+HOW TO DRAW (strict — consistent across all scenes and all effort levels):
 
-KOTAK DEMO = kotak (RoundedRectangle) digambar dengan Manim, sekadar dua ujung untuk memamerkan satu relationship:
-- Warna isi kotak = warna native layer-nya: Business = kuning; Application = biru muda; Technology = hijau; Motivation = UNGU; Strategy = oranye/kuning keemasan. (Aksen panel/teks boleh memakai variasi warna HIGHLIGHT/ACCENT.)
-- Nama elemen sebagai teks DI DALAM kotak (jangan sampai terpotong).
-- Ikon tipe dimuat dari berkas `_logo.svg` aslinya via `SVGMobject("<path>")`, diskalakan KECIL, diletakkan di POJOK KANAN ATAS kotak dengan margin kecil — TIDAK menutupi nama/label. JANGAN menggambar/mengarang ikon sendiri dan JANGAN mewarnai ulang logo (tampilkan apa adanya).
-- Berkas logo elemen yang dipakai untuk kotak demo (HANYA ini): `business_business_process_logo.svg`, `business_business_actor_logo.svg`, `business_business_object_logo.svg`, `business_business_service_logo.svg`, `application_application_component_logo.svg`, `application_application_service_logo.svg`, `application_data_object_logo.svg`, `technology_node_logo.svg`.
+DEMO BOX = a box (RoundedRectangle) drawn with Manim, just two endpoints to show off one relationship:
+- Box fill color = its native layer color: Business = YELLOW; Application = LIGHT BLUE; Technology = GREEN; Motivation = PURPLE; Strategy = ORANGE/golden yellow. (Panel/text accents may use variations of the HIGHLIGHT/ACCENT color.)
+- Element name as text INSIDE the box (must not be cut off).
+- The type icon is loaded from its original `_logo.svg` file via `SVGMobject("<path>")`, scaled SMALL, placed in the TOP-RIGHT CORNER of the box with a small margin — NOT covering the name/label. DO NOT draw/invent your own icon and DO NOT recolor the logo (show it as is).
+- Element logo files used for the demo boxes (ONLY these): `business_business_process_logo.svg`, `business_business_actor_logo.svg`, `business_business_object_logo.svg`, `business_business_service_logo.svg`, `application_application_component_logo.svg`, `application_application_service_logo.svg`, `application_data_object_logo.svg`, `technology_node_logo.svg`, `motivation_driver_logo.svg`, `motivation_goal_logo.svg` (the last two — PURPLE motivation boxes — are used only for the Influence example, whose target must be a Motivation element).
 
-RELATIONSHIP = JANGAN memuat SVG. SELALU gambar dengan metode internal Manim agar bisa menyesuaikan posisi, panjang, dan arah antar kotak. Konvensi arah: SOURCE = kotak asal (sering tempat menempelnya belah ketupat/bulatan), TARGET = kotak tujuan (sering tempat menempelnya kepala panah/segitiga). Pola garis + bentuk ujung sesuai notasi ArchiMate — dokumentasikan SETIAP relationship di sini:
+RELATIONSHIP = DO NOT load SVG. ALWAYS draw with Manim's internal methods so they can adapt position, length, and direction between boxes. Direction convention: SOURCE = the origin box (often where the diamond/dot attaches), TARGET = the destination box (often where the arrow head/triangle attaches). Line pattern + end shape per ArchiMate notation — document EVERY relationship here:
 
-STRUCTURAL (bagaimana elemen tersusun / ditugaskan):
-- Composition: garis SOLID (`Line`); BELAH KETUPAT TERISI (`Polygon` 4 titik, fill penuh, warna PRIMARY) menempel di ujung SOURCE. (helper: `composition_arrow`) Makna: bagian milik utuh; bagian tak bisa lepas dari pemiliknya.
-- Aggregation: garis SOLID (`Line`); BELAH KETUPAT KOSONG (`Polygon` 4 titik, hanya outline, tanpa fill) menempel di ujung SOURCE. Makna: pengelompokan; bagian bisa berdiri sendiri.
-- Assignment: garis SOLID (`Line`); BULATAN TERISI (`Dot`) menempel di ujung SOURCE + kepala panah TERISI (`Triangle`/`Polygon` segitiga, fill penuh) di ujung TARGET. (helper: `assignment_arrow`) Makna: penugasan aktif (siapa menjalankan apa).
-- Realization: garis TITIK-TITIK (`DottedLine`); kepala SEGITIGA KOSONG (`Triangle` hanya outline, tanpa fill) di ujung TARGET. (helper: `realization_arrow`) Makna: sesuatu mewujudkan/merealisasikan yang lebih abstrak.
+STRUCTURAL (how elements are composed / assigned):
+- Composition: SOLID line (`Line`); FILLED DIAMOND (`Polygon` with 4 points, fully filled, PRIMARY color) attached at the SOURCE end. (helper: `composition_arrow`) Meaning: a part belongs to a whole; the part cannot exist apart from its owner.
+- Aggregation: SOLID line (`Line`); HOLLOW DIAMOND (`Polygon` with 4 points, outline only, no fill) attached at the SOURCE end. Meaning: a grouping; the part can stand on its own.
+- Assignment: SOLID line (`Line`); FILLED dot (`Dot`) attached at the SOURCE end + FILLED arrow head (`Triangle`/`Polygon` triangle, fully filled) at the TARGET end. (helper: `assignment_arrow`) Meaning: active assignment (who performs what).
+- Realization: DOTTED line (`DottedLine`); HOLLOW TRIANGLE head (`Triangle`, outline only, no fill) at the TARGET end. (helper: `realization_arrow`) Meaning: something realizes/makes concrete a more abstract thing.
 
-DEPENDENCY (bagaimana elemen saling bergantung / dilayani):
-- Serving: garis SOLID (`Line`); kepala panah TERBUKA (dua garis "V", tanpa isi) di ujung TARGET. (helper: `serving_arrow`) Makna: satu elemen melayani/menyediakan fungsi bagi yang lain.
-- Access: garis TITIK-TITIK (`DottedLine`); kepala panah TERBUKA KECIL (V kecil) di ujung TARGET (arah panah menandakan read/write). Makna: perilaku mengakses data/objek.
-- Influence: garis PUTUS-PUTUS (`DashedLine`); kepala panah TERBUKA (V) di ujung TARGET; opsional label kecil "+" atau "−" di dekat garis. (helper: `influence_arrow`) Makna: sesuatu memengaruhi (positif/negatif) yang lain.
+DEPENDENCY (how elements depend on / are served by each other):
+- Serving: SOLID line (`Line`); OPEN arrow head (two "V" lines, no fill) at the TARGET end. (helper: `serving_arrow`) Meaning: one element serves/provides a function to another.
+- Access: DOTTED line (`DottedLine`); SMALL OPEN arrow head (small V) at the TARGET end (the arrow direction indicates read/write). Meaning: behavior accessing data/objects.
+- Influence: DASHED line (`DashedLine`); OPEN arrow head (V) at the TARGET end; optional small "+" or "−" label near the line. (helper: `influence_arrow`) Meaning: something influences (positively/negatively) another.
 
-DYNAMIC (bagaimana urutan/aliran berjalan):
-- Triggering: garis SOLID (`Line`); kepala panah TERISI (segitiga fill penuh) di ujung TARGET. Makna: urutan kausal/temporal — satu memicu yang berikutnya. (Bedakan dari Assignment: Triggering TANPA bulatan di SOURCE.)
-- Flow: garis PUTUS-PUTUS (`DashedLine`); kepala panah TERISI (segitiga fill penuh) di ujung TARGET. Makna: aliran informasi/nilai/barang dari satu ke yang lain.
+DYNAMIC (how sequence/flow runs):
+- Triggering: SOLID line (`Line`); FILLED arrow head (fully filled triangle) at the TARGET end. Meaning: causal/temporal sequence — one triggers the next. (Distinguish from Assignment: Triggering has NO dot at the SOURCE.)
+- Flow: DASHED line (`DashedLine`); FILLED arrow head (fully filled triangle) at the TARGET end. Meaning: a flow of information/value/goods from one to another.
 
 OTHER:
-- Specialization: garis SOLID (`Line`); kepala SEGITIGA KOSONG (`Triangle` hanya outline, tanpa fill) di ujung TARGET (parent). Makna: "adalah jenis dari" (is-a). (Bedakan dari Realization yang garisnya TITIK-TITIK.)
-- Association: garis SOLID polos (`Line`) tanpa kepala, atau panah TERBUKA KECIL opsional di salah satu ujung. (helper: `association_arrow`) Makna: hubungan umum yang tidak tercakup tipe lain.
-- Junction: BUKAN garis penuh, melainkan SIMPUL kecil — lingkaran KECIL TERISI (`Dot`, AND) atau lingkaran KECIL KOSONG (`Circle` outline kecil, OR) — tempat beberapa relationship sejenis bertemu/bercabang. Gambar sebagai titik penghubung di persimpangan beberapa garis.
+- Specialization: SOLID line (`Line`); HOLLOW TRIANGLE head (`Triangle`, outline only, no fill) at the TARGET end (the parent). Meaning: "is a kind of" (is-a). (Distinguish from Realization, whose line is DOTTED.)
+- Association: plain SOLID line (`Line`) with no head, or an optional SMALL OPEN arrow at one end. (helper: `association_arrow`) Meaning: a general relationship not covered by the other types.
+- Junction: NOT a full line, but a small NODE — a SMALL FILLED circle (`Dot`, AND) or a SMALL HOLLOW circle (small `Circle` outline, OR) — where several relationships of the same kind meet/branch. Draw it as a connecting point at the junction of several lines.
 
-Beri label nama relationship di dekat garis bila membantu. Pakai warna semantik (DANGER/OK/HIGHLIGHT/PRIMARY/ACCENT) hanya untuk menegaskan, bukan mengganti makna notasi.
+Label the relationship name near the line where it helps. Use semantic colors (DANGER/OK/HIGHLIGHT/PRIMARY/ACCENT) only for emphasis, not to replace the meaning of the notation.
 
-## 01_kenapa_notasi_penting (~18s)
-Judul besar "ArchiMate — Relationships" di tengah + subjudul "the lines that give the model meaning". Tampilkan dua kotak demo polos (Business kuning) dengan sebuah garis di antaranya, lalu tegaskan: garis itu sendiri membawa makna — gaya garis (solid / putus-putus / titik-titik) dan bentuk ujung (belah ketupat / bulatan / segitiga / panah) menentukan ARTI hubungan. Pratinjau cepat: geser tiga gaya garis (solid, dashed, dotted) lalu tiga bentuk ujung. Tegaskan relationship adalah CONNECTOR, bukan elemen — selalu digambar, tak punya logo. Sorot pesan dengan warna HIGHLIGHT.
+## 01_why_notation_matters (~18s)
+Big title "ArchiMate — Relationships" centered + subtitle "the lines that give the model meaning". Show two plain demo boxes (Business YELLOW) with a single line between them, then emphasize: the line itself carries meaning — the line style (solid / dashed / dotted) and the end shape (diamond / dot / triangle / arrow) determine the MEANING of the relationship. Quick preview: cycle through the three line styles (solid, dashed, dotted) then the three end shapes. Emphasize that a relationship is a CONNECTOR, not an element — always drawn, never has a logo. Highlight the message with HIGHLIGHT color.
 
 ## 02_structural_relationships (~32s)
-Perkenalkan keluarga STRUCTURAL satu per satu; tiap pasangan = dua kotak demo (warna layer + nama di dalam + logo di pojok kanan atas) dihubungkan relationship yang DIGAMBAR Manim sesuai pola di Preparation; beri label nama relationship dekat garis:
-- Composition: Business Service (`business_business_service_logo.svg`) "Layanan Restoran" —composition→ Business Process (`business_business_process_logo.svg`) "Memasak" (garis SOLID; BELAH KETUPAT TERISI menempel di SOURCE "Layanan Restoran"). Makna: proses adalah bagian utuh dari layanan.
-- Aggregation: Business Service (`business_business_service_logo.svg`) "Paket Menu" —aggregation→ Business Object (`business_business_object_logo.svg`) "Menu Item" (garis SOLID; BELAH KETUPAT KOSONG di SOURCE). Makna: pengelompokan longgar; item bisa berdiri sendiri.
-- Assignment: Business Actor (`business_business_actor_logo.svg`) "Pelayan" —assignment→ Business Process (`business_business_process_logo.svg`) "Menyajikan" (garis SOLID; BULATAN TERISI di SOURCE "Pelayan" + kepala panah TERISI di TARGET). Sebut helper `assignment_arrow`.
-- Realization: Application Component (`application_application_component_logo.svg`) "Aplikasi Pemesanan" —realization→ Application Service (`application_application_service_logo.svg`) "Layanan Pemesanan Online" (garis TITIK-TITIK; SEGITIGA KOSONG di TARGET). Sebut helper `realization_arrow`. Tekankan beda fill diamond (terisi vs kosong) menentukan Composition vs Aggregation.
+Introduce the STRUCTURAL family one by one; each pair = two demo boxes (layer color + name inside + logo in the top-right corner) connected by a relationship DRAWN by Manim per the patterns in Preparation; label the relationship name near the line:
+- Composition: Business Process (`business_business_process_logo.svg`) ID "Layani Pelanggan" | EN "Serve Customer" —composition→ Business Process (`business_business_process_logo.svg`) ID "Memasak" | EN "Cooking" (SOLID line; FILLED DIAMOND attached at the SOURCE ID "Layani Pelanggan" | EN "Serve Customer"). Meaning: cooking is an integral part of the overall serve-customer process — the part cannot stand on its own. (Note: a Service is REALIZED by a Process, so don't compose a Service out of a Process.)
+- Aggregation: Business Object (`business_business_object_logo.svg`) ID "Paket Menu" | EN "Menu Package" —aggregation→ Business Object (`business_business_object_logo.svg`) ID "Menu Item" | EN "Menu Item" (SOLID line; HOLLOW DIAMOND at the SOURCE). Meaning: a loose grouping; the item can stand on its own.
+- Assignment: Business Actor (`business_business_actor_logo.svg`) ID "Pelayan" | EN "Waiter" —assignment→ Business Process (`business_business_process_logo.svg`) ID "Menyajikan" | EN "Serving" (SOLID line; FILLED dot at the SOURCE ID "Pelayan" | EN "Waiter" + FILLED arrow head at the TARGET). Mention the helper `assignment_arrow`.
+- Realization: Application Component (`application_application_component_logo.svg`) ID "Aplikasi Pemesanan" | EN "Ordering App" —realization→ Application Service (`application_application_service_logo.svg`) ID "Layanan Pemesanan Online" | EN "Online Ordering Service" (DOTTED line; HOLLOW TRIANGLE at the TARGET). Mention the helper `realization_arrow`. Emphasize that the diamond fill (filled vs hollow) is what tells Composition from Aggregation.
 
 ## 03_dependency_relationships (~26s)
-Perkenalkan keluarga DEPENDENCY; tiap pasangan dua kotak demo + relationship DIGAMBAR Manim; label dekat garis:
-- Serving: Application Service (`application_application_service_logo.svg`) "Layanan Pemesanan Online" —serving→ Business Process (`business_business_process_logo.svg`) "Menerima Pesanan" (garis SOLID; kepala panah TERBUKA "V" di TARGET). Sebut helper `serving_arrow`. Makna: layanan melayani proses.
-- Access: Business Process (`business_business_process_logo.svg`) "Menerima Pesanan" —access→ Data Object (`application_data_object_logo.svg`) "Data Pesanan" (garis TITIK-TITIK; kepala panah TERBUKA KECIL di TARGET). Makna: proses membaca/menulis data.
-- Influence: Business Object (`business_business_object_logo.svg`) "Ulasan Pelanggan" —influence→ Business Service (`business_business_service_logo.svg`) "Layanan Restoran" (garis PUTUS-PUTUS; kepala panah TERBUKA "V" di TARGET; tampilkan label kecil "+"). Sebut helper `influence_arrow`. Tegaskan: dependency = "siapa butuh/pengaruhi siapa".
+Introduce the DEPENDENCY family; each pair = two demo boxes + a relationship DRAWN by Manim; label near the line:
+- Serving: Application Service (`application_application_service_logo.svg`) ID "Layanan Pemesanan Online" | EN "Online Ordering Service" —serving→ Business Process (`business_business_process_logo.svg`) ID "Menerima Pesanan" | EN "Receive Order" (SOLID line; OPEN "V" arrow head at the TARGET). Mention the helper `serving_arrow`. Meaning: the service serves the process.
+- Access: Business Process (`business_business_process_logo.svg`) ID "Menerima Pesanan" | EN "Receive Order" —access→ Data Object (`application_data_object_logo.svg`) ID "Data Pesanan" | EN "Order Data" (DOTTED line; SMALL OPEN arrow head at the TARGET). Meaning: the process reads/writes the data.
+- Influence: Driver (`motivation_driver_logo.svg`) ID "Persaingan" | EN "Competition" —influence→ Goal (`motivation_goal_logo.svg`) ID "Tingkatkan pendapatan" | EN "Increase revenue" (DASHED line; OPEN "V" arrow head at the TARGET Goal; show a small "+/−" label). Mention the helper `influence_arrow`. IMPORTANT: an Influence relationship's TARGET must always be a Motivation element (Goal, Requirement, Outcome, Principle, …) — that is why it points at a Goal, NOT at a Business Service or a Capability. Emphasize: dependency = "who needs/influences whom".
 
 ## 04_dynamic_relationships (~24s)
-Perkenalkan keluarga DYNAMIC (urutan & aliran); tiap pasangan dua kotak demo + relationship DIGAMBAR Manim; label dekat garis:
-- Triggering: Business Process (`business_business_process_logo.svg`) "Menerima Pesanan" —triggering→ Business Process (`business_business_process_logo.svg`) "Memasak" (garis SOLID; kepala panah TERISI di TARGET; TANPA bulatan di SOURCE). Makna: langkah memicu langkah berikutnya secara berurutan.
-- Flow: Business Process (`business_business_process_logo.svg`) "Memasak" —flow→ Business Process (`business_business_process_logo.svg`) "Mengantar" (garis PUTUS-PUTUS; kepala panah TERISI di TARGET). Makna: sesuatu (makanan/informasi) mengalir antar langkah. Sandingkan Triggering vs Flow berdampingan dan sorot beda gaya garis (SOLID vs PUTUS-PUTUS) dengan warna ACCENT.
+Introduce the DYNAMIC family (sequence & flow); each pair = two demo boxes + a relationship DRAWN by Manim; label near the line:
+- Triggering: Business Process (`business_business_process_logo.svg`) ID "Menerima Pesanan" | EN "Receive Order" —triggering→ Business Process (`business_business_process_logo.svg`) ID "Memasak" | EN "Cooking" (SOLID line; FILLED arrow head at the TARGET; NO dot at the SOURCE). Meaning: a step triggers the next step in sequence.
+- Flow: Business Process (`business_business_process_logo.svg`) ID "Memasak" | EN "Cooking" —flow→ Business Process (`business_business_process_logo.svg`) ID "Mengantar" | EN "Delivering" (DASHED line; FILLED arrow head at the TARGET). Meaning: something (food/information) flows between steps. Place Triggering vs Flow side by side and highlight the difference in line style (SOLID vs DASHED) with ACCENT color.
 
 ## 05_other_relationships (~24s)
-Perkenalkan keluarga OTHER; tiap pasangan dua kotak demo + relationship DIGAMBAR Manim; label dekat garis:
-- Specialization: Business Process (`business_business_process_logo.svg`) "Pesan Antar" —specialization→ Business Process (`business_business_process_logo.svg`) "Layani Pesanan" (garis SOLID; SEGITIGA KOSONG di TARGET/parent). Makna: "adalah jenis dari". Tegaskan beda dengan Realization: di sini garis SOLID, Realization garis TITIK-TITIK.
-- Association: Business Actor (`business_business_actor_logo.svg`) "Pelanggan" —association→ Business Service (`business_business_service_logo.svg`) "Layanan Restoran" (garis SOLID polos; opsional panah TERBUKA KECIL). Sebut helper `association_arrow`. Makna: hubungan umum.
-- Junction: tampilkan dua Triggering dari Business Process (`business_business_process_logo.svg`) "Bayar" dan Business Process "Konfirmasi" bertemu di sebuah JUNCTION (lingkaran KECIL TERISI = AND) lalu satu garis Triggering lanjut ke Business Process "Cetak Struk". Tegaskan Junction menyatukan/mencabangkan beberapa relationship sejenis (gambar sebagai `Dot` kecil di persimpangan).
+Introduce the OTHER family; each pair = two demo boxes + a relationship DRAWN by Manim; label near the line:
+- Specialization: Business Process (`business_business_process_logo.svg`) ID "Pesan Antar" | EN "Delivery Order" —specialization→ Business Process (`business_business_process_logo.svg`) ID "Layani Pesanan" | EN "Serve Order" (SOLID line; HOLLOW TRIANGLE at the TARGET/parent). Meaning: "is a kind of". Emphasize the difference from Realization: here the line is SOLID, while Realization is DOTTED.
+- Association: Business Actor (`business_business_actor_logo.svg`) ID "Pelanggan" | EN "Customer" —association→ Business Service (`business_business_service_logo.svg`) ID "Layanan Restoran" | EN "Restaurant Service" (plain SOLID line; optional SMALL OPEN arrow). Mention the helper `association_arrow`. Meaning: a general relationship.
+- Junction: show two Triggering lines from Business Process (`business_business_process_logo.svg`) ID "Bayar" | EN "Pay" and Business Process ID "Konfirmasi" | EN "Confirm" meeting at a JUNCTION (a SMALL FILLED circle = AND), then one Triggering line continuing to Business Process ID "Cetak Struk" | EN "Print Receipt". Emphasize that a Junction joins/branches several relationships of the same kind (draw it as a small `Dot` at the junction).
 
-## 06_mini_diagram_restoran (~30s)
-Mini-diagram restoran dibangun bertahap memakai beberapa relationship sekaligus; semua kotak demo + relationship DIGAMBAR Manim sesuai pola di Preparation:
-- Business Actor (`business_business_actor_logo.svg`) "Pelanggan" —serving← Application Service (`application_application_service_logo.svg`) "Layanan Pemesanan Online" (layanan melayani pelanggan; kepala panah TERBUKA di TARGET pelanggan).
-- Application Component (`application_application_component_logo.svg`) "Aplikasi Pemesanan" —assignment→ Application Service (`application_application_service_logo.svg`) "Layanan Pemesanan Online" (bulatan di SOURCE + panah TERISI di TARGET).
-- Application Service —serving→ Business Process (`business_business_process_logo.svg`) "Menerima Pesanan".
-- Business Process "Menerima Pesanan" —triggering→ Business Process (`business_business_process_logo.svg`) "Memasak" —flow→ Business Process (`business_business_process_logo.svg`) "Mengantar" (triggering SOLID panah TERISI; flow PUTUS-PUTUS panah TERISI).
-- Business Process "Menerima Pesanan" —access→ Data Object (`application_data_object_logo.svg`) "Data Pesanan" (TITIK-TITIK, panah terbuka kecil).
-- Technology Node (`technology_node_logo.svg`) "Server" —assignment→ Application Component "Aplikasi Pemesanan" (node menjalankan komponen). Tegaskan: dengan kombinasi relationship inilah model bercerita utuh.
+## 06_restaurant_mini_diagram (~30s)
+A restaurant mini-diagram built up step by step using several relationships at once; all demo boxes + relationships DRAWN by Manim per the patterns in Preparation:
+- Business Actor (`business_business_actor_logo.svg`) ID "Pelanggan" | EN "Customer" —serving← Application Service (`application_application_service_logo.svg`) ID "Layanan Pemesanan Online" | EN "Online Ordering Service" (the service serves the customer; OPEN arrow head at the TARGET, the customer).
+- Application Component (`application_application_component_logo.svg`) ID "Aplikasi Pemesanan" | EN "Ordering App" —realization→ Application Service (`application_application_service_logo.svg`) ID "Layanan Pemesanan Online" | EN "Online Ordering Service" (DOTTED line; HOLLOW TRIANGLE at the TARGET): the component realizes the service it exposes.
+- Application Service ID "Layanan Pemesanan Online" | EN "Online Ordering Service" —serving→ Business Process (`business_business_process_logo.svg`) ID "Menerima Pesanan" | EN "Receive Order".
+- Business Process ID "Menerima Pesanan" | EN "Receive Order" —triggering→ Business Process (`business_business_process_logo.svg`) ID "Memasak" | EN "Cooking" —flow→ Business Process (`business_business_process_logo.svg`) ID "Mengantar" | EN "Delivering" (triggering SOLID with FILLED arrow; flow DASHED with FILLED arrow).
+- Business Process ID "Menerima Pesanan" | EN "Receive Order" —access→ Data Object (`application_data_object_logo.svg`) ID "Data Pesanan" | EN "Order Data" (DOTTED line, small open arrow).
+- Technology Node (`technology_node_logo.svg`) ID "Server" | EN "Server" —serving→ Application Component ID "Aplikasi Pemesanan" | EN "Ordering App" (SOLID line; OPEN arrow head at the component): the node serves/runs the component — Technology SERVES Application (not assignment). Emphasize: it is this combination of relationships that lets the model tell a complete story.
 
 ## 07_recap_cheat_sheet (~22s)
-Tutup dengan kartu contekan (cheat-sheet) seluruh relationship — tiap baris = potongan garis pendek DIGAMBAR Manim dengan ujungnya + nama:
-- Composition: garis SOLID + belah ketupat TERISI.
-- Aggregation: garis SOLID + belah ketupat KOSONG.
-- Assignment: garis SOLID + bulatan TERISI di sumber + panah TERISI.
-- Realization: garis TITIK-TITIK + segitiga KOSONG.
-- Serving: garis SOLID + panah TERBUKA.
-- Access: garis TITIK-TITIK + panah terbuka KECIL.
-- Influence: garis PUTUS-PUTUS + panah TERBUKA (+/−).
-- Triggering: garis SOLID + panah TERISI.
-- Flow: garis PUTUS-PUTUS + panah TERISI.
-- Specialization: garis SOLID + segitiga KOSONG.
-- Association: garis SOLID polos.
-- Junction: lingkaran kecil (TERISI = AND, KOSONG = OR).
-Pesan penutup: ingat dua hal — GAYA GARIS (solid/dashed/dotted) dan BENTUK UJUNG (diamond/ball/triangle/arrow); itulah yang membedakan setiap relationship. Sorot ringkasan dengan warna HIGHLIGHT.
+Close with a cheat-sheet of all the relationships — each row = a short line segment DRAWN by Manim with its end shape + name:
+- Composition: SOLID line + FILLED diamond.
+- Aggregation: SOLID line + HOLLOW diamond.
+- Assignment: SOLID line + FILLED dot at the source + FILLED arrow.
+- Realization: DOTTED line + HOLLOW triangle.
+- Serving: SOLID line + OPEN arrow.
+- Access: DOTTED line + SMALL open arrow.
+- Influence: DASHED line + OPEN arrow (+/−).
+- Triggering: SOLID line + FILLED arrow.
+- Flow: DASHED line + FILLED arrow.
+- Specialization: SOLID line + HOLLOW triangle.
+- Association: plain SOLID line.
+- Junction: small circle (FILLED = AND, HOLLOW = OR).
+Closing message: remember two things — LINE STYLE (solid/dashed/dotted) and END SHAPE (diamond/ball/triangle/arrow); that is what distinguishes each relationship. Highlight the summary with HIGHLIGHT color.

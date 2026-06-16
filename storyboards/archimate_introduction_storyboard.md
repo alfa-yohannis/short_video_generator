@@ -9,22 +9,30 @@ length: 2-3 minutes
 
 # ArchiMate Introduction
 
-Video tutorial animasi singkat sebagai pengantar / gambaran umum ArchiMate — bahasa pemodelan enterprise-architecture terbuka dari The Open Group — sebelum video per-layer. Audiens pemula. Gaya: bersih, satu ide per layar, transisi halus.
+A short animated tutorial video that introduces / gives an overview of ArchiMate — the open enterprise-architecture modeling language from The Open Group — before the per-layer videos. Audience: beginners. Style: clean, one idea per screen, smooth transitions.
 
-Versi bahasa Inggris seluruhnya bahasa Inggris (termasuk contoh). Versi bahasa Indonesia seluruhnya bahasa Indonesia, kecuali nama elemen ArchiMate (kosakata standar notasi).
+The English version is entirely in English (including ALL displayed and spoken restaurant examples/labels). The Indonesian version is entirely in Indonesian. The ONLY exception: STANDARD ArchiMate VOCABULARY — terms that the ArchiMate notation itself uses in English — stays the same (in English) in BOTH versions. This covers:
+- Product names: "ArchiMate", "The Open Group".
+- Layer names: Strategy, Business, Application, Technology, Motivation, Implementation & Migration.
+- Aspect names: Active Structure, Behavior, Passive Structure, Motivation.
+- Element type names: e.g. Capability, Business Process, Application Component, Node, Goal, Work Package.
+- Relationship names: e.g. Realization, Serving, Assignment, Influence, Composition, Association.
+ALL other words (ordinary titles, subtitles, narration, explanatory phrases, and restaurant example labels) MUST follow the video's language.
 
-Contoh konsisten di SELURUH scene: sebuah RESTORAN yang ingin berkembang (dari arah strategi, proses bisnis, aplikasi, sampai infrastruktur teknologi) — satu model utuh dari strategi hingga teknologi.
+MANDATORY LANGUAGE RULE (to avoid mixing): every displayed example label is written as an `ID "…" | EN "…"` pair. The English version may use ONLY the EN text; the Indonesian version may use ONLY the ID text. NEVER show an Indonesian word in the English video, and vice versa — including text inside boxes, line/relationship labels, titles, subtitles, and the spoken narration.
+
+Consistent example across ALL scenes: a RESTAURANT that wants to grow (from strategic direction, business process, application, down to technology infrastructure) — one complete model from strategy to technology.
 
 # Preparation
-Tidak perlu MCP/Archi. Ikon tipe elemen tersedia sebagai berkas SVG `_logo` di folder pada `assets_dir` (front-matter) beserta `manifest.json`; generator otomatis menyuntikkan daftar berkas + path absolutnya ke setiap scene.
+No MCP/Archi needed. Element-type icons are available as `_logo` SVG files in the folder at `assets_dir` (front-matter) together with `manifest.json`; the generator automatically injects the file list + their absolute paths into every scene.
 
-CARA MENGGAMBAR (strict — konsisten di semua scene dan semua tingkat effort):
+HOW TO DRAW (strict — consistent across all scenes and all effort levels):
 
-ELEMEN = kotak (RoundedRectangle) digambar dengan Manim:
-- Warna isi kotak = warna native layer-nya: Strategy = ORANYE; Business = KUNING; Application = BIRU MUDA; Technology = HIJAU; Motivation = UNGU; Implementation & Migration = PINK. (Aksen panel/teks boleh memakai variasi warna layer terkait.)
-- Nama elemen sebagai teks DI DALAM kotak (jangan sampai terpotong).
-- Ikon tipe dimuat dari berkas `_logo.svg` aslinya via `SVGMobject("<path>")`, diskalakan KECIL, diletakkan di POJOK KANAN ATAS kotak dengan margin kecil — TIDAK menutupi nama/label. JANGAN menggambar/mengarang ikon sendiri dan JANGAN mewarnai ulang logo (tampilkan apa adanya).
-- Untuk overview ini cukup SATU elemen representatif per layer. Berkas logo per layer:
+ELEMENT = a box (RoundedRectangle) drawn with Manim:
+- Box fill color = its native layer color: Strategy = ORANGE; Business = YELLOW; Application = LIGHT BLUE; Technology = GREEN; Motivation = PURPLE; Implementation & Migration = PINK. (Panel/text accents may use variations of the related layer color.)
+- Element name as text INSIDE the box (must not be cut off).
+- The type icon is loaded from its original `_logo.svg` file via `SVGMobject("<path>")`, scaled SMALL, placed in the TOP-RIGHT CORNER of the box with a small margin — NOT covering the name/label. DO NOT draw/invent your own icon and DO NOT recolor the logo (show it as is).
+- For this overview, ONE representative element per layer is enough. Logo file per layer:
   - Strategy: `strategy_capability_logo.svg` (Capability).
   - Business: `business_business_process_logo.svg` (Business Process).
   - Application: `application_application_component_logo.svg` (Application Component).
@@ -32,51 +40,51 @@ ELEMEN = kotak (RoundedRectangle) digambar dengan Manim:
   - Motivation: `motivation_goal_logo.svg` (Goal).
   - Implementation & Migration: `implementation_work_package_logo.svg` (Work Package).
 
-RELASI = JANGAN memuat SVG. Gambar dengan metode internal Manim (`Line` / `DashedLine` + bentuk kepala dari `Polygon`/`Triangle`/`Dot`) memakai build-helper yang tersedia (`realization_arrow`, `serving_arrow`, `assignment_arrow`, `influence_arrow`, `composition_arrow`, `association_arrow`) agar bisa menyesuaikan posisi, panjang, dan arah antar kotak. Pola garis + bentuk kepala sesuai notasi ArchiMate:
-- Realization (`realization_arrow`): garis TITIK-TITIK (dotted); kepala SEGITIGA KOSONG (outline) di target. Untuk overview, dipakai NAIK ke atas tumpukan (layer bawah mewujudkan elemen layer di atasnya / Business mewujudkan Strategy).
-- Serving (`serving_arrow`): garis SOLID; kepala panah TERBUKA (V) di target. Untuk overview, dipakai TURUN melayani tumpukan (Technology melayani Application melayani Business).
-- Assignment (`assignment_arrow`): garis SOLID; bulatan TERISI (`Dot`) di ujung sumber; kepala panah TERISI di target.
-- Influence (`influence_arrow`): garis PUTUS-PUTUS (dashed); kepala panah TERBUKA (V) di target. Untuk overview, dipakai dari Motivation yang menjustifikasi semua layer.
-- Composition (`composition_arrow`): garis SOLID; BELAH KETUPAT TERISI di ujung sumber.
-- Association (`association_arrow`): garis SOLID polos (tanpa kepala, atau panah terbuka kecil).
-Beri label nama relasi di dekat garis bila membantu.
+RELATIONSHIP = DO NOT load SVG. Draw with Manim's internal methods (`Line` / `DashedLine` + head shapes from `Polygon`/`Triangle`/`Dot`) using the available build-helpers (`realization_arrow`, `serving_arrow`, `assignment_arrow`, `influence_arrow`, `composition_arrow`, `association_arrow`) so they can adapt position, length, and direction between boxes. Line pattern + head shape per ArchiMate notation:
+- Realization (`realization_arrow`): DOTTED line; HOLLOW TRIANGLE (outline) head at the target. For the overview, used going UP the stack — a lower/more concrete element realizes the more abstract element above it (Business Process realizes Capability; Capability realizes the Motivation Goal). The triangle always points UP toward the realized element.
+- Serving (`serving_arrow`): SOLID line; OPEN arrow head (V) at the target. For the overview, used going DOWN serving the stack (Technology serves Application serves Business).
+- Assignment (`assignment_arrow`): SOLID line; FILLED dot (`Dot`) at the source end; FILLED arrow head at the target.
+- Influence (`influence_arrow`): DASHED line; OPEN arrow head (V) at the target. (Available for motivation-style influence between elements. NOTE: in this overview the core/strategy elements REALIZE the Goal — do NOT draw an arrow from the Goal pointing down into the stack.)
+- Composition (`composition_arrow`): SOLID line; FILLED DIAMOND at the source end.
+- Association (`association_arrow`): plain SOLID line (no head, or a small open arrow).
+Label the relationship name near the line where it helps.
 
-Warna semantik untuk penegasan (terpisah dari warna layer): DANGER, OK, HIGHLIGHT, PRIMARY, ACCENT. Hindari kata yang menyebut orientasi/aspek-rasio pada teks yang ditampilkan maupun diucapkan.
+Semantic colors for emphasis (separate from the layer colors): DANGER, OK, HIGHLIGHT, PRIMARY, ACCENT. Avoid any word that names the orientation/aspect-ratio in displayed or spoken text.
 
-## 01_apa_itu_archimate (~22s)
-Judul besar "ArchiMate" di tengah layar + subjudul "satu bahasa untuk enterprise architecture" (versi Inggris: "one language for enterprise architecture"). Jelaskan apa itu: bahasa pemodelan terbuka dari The Open Group untuk menggambarkan, menganalisis, dan mengomunikasikan arsitektur enterprise. Tegaskan mengapa dibutuhkan: ia menyatukan strategi sampai teknologi dalam SATU model bersama yang dipahami semua pemangku kepentingan. Sorot kata kunci dengan warna HIGHLIGHT/PRIMARY. Belum ada kotak elemen — fokus pada judul dan ide besar.
+## 01_what_is_archimate (~22s)
+Big title "ArchiMate" centered on screen + subtitle "one language for enterprise architecture" (Indonesian version: "satu bahasa untuk enterprise architecture"). Explain what it is: an open modeling language from The Open Group to describe, analyze, and communicate enterprise architecture. Emphasize why it is needed: it unifies strategy down to technology in ONE shared model understood by all stakeholders. Highlight keywords with HIGHLIGHT/PRIMARY color. No element boxes yet — focus on the title and the big idea.
 
-## 02_kerangka_berlapis (~30s)
-Perkenalkan LAYERED FRAMEWORK: gambar pita-pita berwarna bertumpuk dari atas ke bawah dan beri label tiap pita —
-- Strategy (pita ORANYE).
-- Business (pita KUNING).
-- Application (pita BIRU MUDA).
-- Technology (pita HIJAU).
-Lalu gambar Motivation sebagai KOLOM UNGU tinggi yang berdiri menyilang di samping seluruh pita (memberi alasan bagi semua layer), dan Implementation & Migration sebagai PITA PINK di paling bawah (mewujudkan perubahan dari rencana ke realisasi). Beri label tiap band/kolom. Munculkan bertahap agar tiap layer dapat perhatian. Tegaskan: empat layer inti bertumpuk, Motivation menyilang, Implementation & Migration menutup di bawah.
+## 02_layered_framework (~30s)
+Introduce the LAYERED FRAMEWORK: draw colored bands stacked top to bottom and label each band —
+- Strategy (ORANGE band).
+- Business (YELLOW band).
+- Application (LIGHT BLUE band).
+- Technology (GREEN band).
+Then draw Motivation as a tall PURPLE COLUMN standing crosswise beside the whole stack of bands (providing the reason for all layers), and Implementation & Migration as a PINK BAND at the very bottom (realizing the change from plan to reality). Label each band/column. Reveal them gradually so each layer gets attention. Emphasize: the four core layers stack up, Motivation runs crosswise, Implementation & Migration closes at the bottom.
 
-## 03_aspek_kerangka (~26s)
-Tampilkan kerangka sebagai GRID: tiga kolom ASPECTS + Motivation di sisinya. Jelaskan tiap aspek dengan satu frasa singkat:
-- Active Structure = "siapa/apa yang bertindak" (who/what acts).
-- Behavior = "apa yang terjadi" (what happens).
-- Passive Structure = "apa yang dikenai tindakan" (what is acted on).
-- Motivation = "mengapa" (the why), menyilang di samping.
-Gambar grid: baris = layer berwarna (Strategy/Business/Application/Technology), kolom = ketiga aspek, dengan kolom Motivation UNGU di sisi. Sorot judul kolom aspek dengan warna ACCENT. Tegaskan: setiap elemen ArchiMate menempati satu sel layer × aspek, sehingga model rapi dan dapat dibandingkan.
+## 03_framework_aspects (~26s)
+Show the framework as a GRID: three ASPECTS columns + Motivation beside it. Explain each aspect with one short phrase:
+- Active Structure = "who/what acts" (Indonesian: "siapa/apa yang bertindak").
+- Behavior = "what happens" (Indonesian: "apa yang terjadi").
+- Passive Structure = "what is acted on" (Indonesian: "apa yang dikenai tindakan").
+- Motivation = "the why" (Indonesian: "mengapa"), crosswise on the side.
+Draw the grid: rows = colored layers (Strategy/Business/Application/Technology), columns = the three aspects, with a PURPLE Motivation column on the side. Highlight the aspect column headers with ACCENT color. Emphasize: every ArchiMate element occupies one layer × aspect cell, so the model is tidy and comparable.
 
-## 04_satu_elemen_per_layer (~30s)
-Tunjukkan SATU elemen representatif per layer sebagai kotak (sesuai aturan menggambar: warna layer + nama di dalam + logo di pojok kanan atas), tampil bertahap dari atas ke bawah, masing-masing dengan contoh restoran di bawah kotak:
-- Strategy — Capability (kotak ORANYE, `strategy_capability_logo.svg`) "Layanan delivery".
-- Business — Business Process (kotak KUNING, `business_business_process_logo.svg`) "Proses pesan-antar".
-- Application — Application Component (kotak BIRU MUDA, `application_application_component_logo.svg`) "Aplikasi Pemesanan".
-- Technology — Node (kotak HIJAU, `technology_node_logo.svg`) "Server aplikasi".
-Tunjukkan juga konteksnya: Motivation — Goal (kotak UNGU, `motivation_goal_logo.svg`) "Tingkatkan pendapatan" di samping, dan Implementation & Migration — Work Package (kotak PINK, `implementation_work_package_logo.svg`) "Proyek go-online" di bawah. Tegaskan: satu kosakata yang sama dipakai untuk seluruh restoran, dari arah sampai mesin.
+## 04_one_element_per_layer (~30s)
+Show ONE representative element per layer as a box (per the drawing rules: layer color + name inside + logo in the top-right corner), revealed gradually top to bottom, each with its restaurant example below the box:
+- Strategy — Capability (ORANGE box, `strategy_capability_logo.svg`) ID "Layanan delivery" | EN "Delivery service".
+- Business — Business Process (YELLOW box, `business_business_process_logo.svg`) ID "Proses pesan-antar" | EN "Order & delivery process".
+- Application — Application Component (LIGHT BLUE box, `application_application_component_logo.svg`) ID "Aplikasi Pemesanan" | EN "Ordering App".
+- Technology — Node (GREEN box, `technology_node_logo.svg`) ID "Server aplikasi" | EN "Application server".
+Also show the context: Motivation — Goal (PURPLE box, `motivation_goal_logo.svg`) ID "Tingkatkan pendapatan" | EN "Increase revenue" on the side, and Implementation & Migration — Work Package (PINK box, `implementation_work_package_logo.svg`) ID "Proyek go-online" | EN "Go-online project" at the bottom. Emphasize: the same single vocabulary is used for the whole restaurant, from direction to machine.
 
-## 05_keterkaitan_antar_layer (~34s)
-Susun keenam kotak dari scene sebelumnya menjadi tumpukan, lalu hubungkan dengan RELASI yang DIGAMBAR Manim (lihat pola + helper di Preparation); tiap kotak = warna layer + nama di dalam + logo di pojok kanan atas; beri label tiap garis:
-- Node (`technology_node_logo.svg`) "Server aplikasi" —serving (`serving_arrow`)→ Application Component (`application_application_component_logo.svg`) "Aplikasi Pemesanan" (garis SOLID; kepala panah TERBUKA): teknologi MELAYANI aplikasi.
-- Application Component "Aplikasi Pemesanan" —serving (`serving_arrow`)→ Business Process (`business_business_process_logo.svg`) "Proses pesan-antar" (garis SOLID; kepala panah TERBUKA): aplikasi MELAYANI bisnis.
-- Business Process "Proses pesan-antar" —realization (`realization_arrow`)→ Capability (`strategy_capability_logo.svg`) "Layanan delivery" (garis TITIK-TITIK; kepala SEGITIGA KOSONG mengarah ke atas): bisnis MEWUJUDKAN kemampuan strategi.
-- Goal (`motivation_goal_logo.svg`) "Tingkatkan pendapatan" (kotak UNGU di sisi) —influence (`influence_arrow`)→ menyentuh seluruh tumpukan (garis PUTUS-PUTUS; kepala panah TERBUKA): Motivation MENJUSTIFIKASI semua layer.
-Tegaskan: serving mengalir TURUN melayani tumpukan, realization mengalir NAIK mewujudkan layer di atasnya, dan Motivation memberi "mengapa" bagi semuanya — model jadi runtut dan dapat ditelusuri.
+## 05_relationships_between_layers (~34s)
+Arrange the six boxes from the previous scene into a stack, then connect them with RELATIONSHIPS DRAWN by Manim (see the patterns + helpers in Preparation); each box = layer color + name inside + logo in the top-right corner; label each line:
+- Node (`technology_node_logo.svg`) ID "Server aplikasi" | EN "Application server" —serving (`serving_arrow`)→ Application Component (`application_application_component_logo.svg`) ID "Aplikasi Pemesanan" | EN "Ordering App" (SOLID line; OPEN arrow head): technology SERVES the application.
+- Application Component ID "Aplikasi Pemesanan" | EN "Ordering App" —serving (`serving_arrow`)→ Business Process (`business_business_process_logo.svg`) ID "Proses pesan-antar" | EN "Order & delivery process" (SOLID line; OPEN arrow head): the application SERVES the business.
+- Business Process ID "Proses pesan-antar" | EN "Order & delivery process" —realization (`realization_arrow`)→ Capability (`strategy_capability_logo.svg`) ID "Layanan delivery" | EN "Delivery service" (DOTTED line; HOLLOW TRIANGLE head pointing up): the business REALIZES the strategic capability.
+- Capability (`strategy_capability_logo.svg`) ID "Layanan delivery" | EN "Delivery service" —realization (`realization_arrow`)→ Goal (`motivation_goal_logo.svg`) ID "Tingkatkan pendapatan" | EN "Increase revenue" (PURPLE box on the side) (DOTTED line; HOLLOW TRIANGLE head pointing UP to the Goal): the strategic capability REALIZES the motivation goal — the stack points UP to the "why" that justifies it.
+Emphasize: serving flows DOWN serving the stack, realization flows UP toward what it realizes (the layer above it, and finally the Goal), so Motivation gives the "why" for everything — the model becomes coherent and traceable. (ArchiMate rule: the core/strategy elements point UP to realize the Goal; never draw the Goal arrowing down into the stack.)
 
-## 06_mengapa_archimate (~30s)
-Recap manfaat: ArchiMate memberi SATU model yang koheren (one coherent model), KETERLACAKAN dari strategi ke teknologi (traceability), dan KOMUNIKASI yang sama bagi semua pemangku kepentingan. Tampilkan lagi rantai ringkas di layar dengan kotak berwarna + logo di pojok kanan atas: Goal (UNGU, `motivation_goal_logo.svg`) → Capability (ORANYE, `strategy_capability_logo.svg`) → Business Process (KUNING, `business_business_process_logo.svg`) → Application Component (BIRU MUDA, `application_application_component_logo.svg`) → Node (HIJAU, `technology_node_logo.svg`), dengan Work Package (PINK, `implementation_work_package_logo.svg`) yang mewujudkan perubahan. Sorot manfaat dengan warna OK/HIGHLIGHT. Tutup dengan ajakan: lanjutkan ke video per-layer — Strategy, Business, Application, Technology, Motivation, dan Implementation & Migration — untuk mendalami tiap layer.
+## 06_why_archimate (~30s)
+Recap the benefits: ArchiMate gives ONE coherent model, TRACEABILITY from strategy to technology, and a SHARED COMMUNICATION for all stakeholders. Show the concise chain again on screen with colored boxes + logo in the top-right corner, drawn so the ArchiMate arrows flow UP the stack (providers/concrete elements point to what they serve or realize): Node (GREEN, `technology_node_logo.svg`) —serving→ Application Component (LIGHT BLUE, `application_application_component_logo.svg`) —serving→ Business Process (YELLOW, `business_business_process_logo.svg`) —realization→ Capability (ORANGE, `strategy_capability_logo.svg`) —realization→ Goal (PURPLE, `motivation_goal_logo.svg`), with Work Package (PINK, `implementation_work_package_logo.svg`) realizing the change. You MAY narrate it top-down ("the Goal needs this Capability, run by this Process, supported by this App, on this Node"), but the DRAWN arrows must point upward. Highlight the benefits with OK/HIGHLIGHT color. Close with a call to action: continue to the per-layer videos — Strategy, Business, Application, Technology, Motivation, and Implementation & Migration — to dive deeper into each layer.
