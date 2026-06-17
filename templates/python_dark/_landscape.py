@@ -24,3 +24,23 @@ CARET_H = 0.42
 # Landscape has no Reels/Shorts caption-safe reserve; tech_background() draws the
 # corner bracket when this is None (the portrait delta sets it to a real value).
 SHORTS_SAFE_BOTTOM = None
+
+
+# --- Fixed code / output stage (landscape) --------------------------------
+# Two anchored slots a code-walkthrough scene fills consistently: the code card
+# on the left, its program output on the right — same place, same bounded size
+# in every scene (see place_code / place_output in _core). The wide 16:9 frame
+# favours side-by-side over stacking. CX = horizontal centre, TOP = top edge
+# (content is top-anchored so it grows downward predictably).
+_STAGE_TOP = config.frame_height / 2 - BAR_H - 0.35
+_STAGE_H = config.frame_height - BAR_H - 1.1
+
+CODE_SLOT_CX = -config.frame_width / 4
+CODE_SLOT_TOP = _STAGE_TOP
+CODE_SLOT_W = config.frame_width / 2 - 0.9
+CODE_SLOT_H = _STAGE_H
+
+OUTPUT_SLOT_CX = config.frame_width / 4
+OUTPUT_SLOT_TOP = _STAGE_TOP
+OUTPUT_SLOT_W = config.frame_width / 2 - 1.2
+OUTPUT_SLOT_H = _STAGE_H

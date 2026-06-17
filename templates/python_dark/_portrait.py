@@ -47,3 +47,20 @@ def fit_to_shorts_area(mob: Mobject, top: float = SHORTS_SAFE_TOP,
         mob.scale(max_height / mob.height)
     mob.move_to([mob.get_center()[0], (top + bottom) / 2, 0])
     return mob
+
+
+# --- Fixed code / output stage (portrait) ---------------------------------
+# Two anchored slots a code-walkthrough scene fills consistently: the code card
+# stacks on top, its program output below — same place, same bounded size in
+# every scene (see place_code / place_output in _core). Both sit inside the
+# Shorts-safe band. CX = horizontal centre, TOP = the slot's top edge (content
+# is top-anchored so it grows downward predictably).
+CODE_SLOT_CX = 0.0
+CODE_SLOT_TOP = SHORTS_SAFE_TOP - 0.25
+CODE_SLOT_W = SHORTS_SAFE_WIDTH
+CODE_SLOT_H = 5.8
+
+OUTPUT_SLOT_CX = 0.0
+OUTPUT_SLOT_TOP = -0.9
+OUTPUT_SLOT_W = SHORTS_SAFE_WIDTH
+OUTPUT_SLOT_H = 3.6

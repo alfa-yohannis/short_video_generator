@@ -18,7 +18,6 @@ on the current plan, even after an earlier edit.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -168,11 +167,19 @@ Here is the current storyboard:
 
     @staticmethod
     def _extract_markdown(reply: str) -> str:
-        """Pull the storyboard markdown out of the AI reply (strip fences/prose)."""
+        """Pull the storyboard markdown out of the AI reply.
+
+        Strips only an OUTER ```markdown … ``` wrapper around the *whole* reply.
+        Code fences INSIDE the storyboard (e.g. ```python blocks in a scene
+        description) are preserved — an earlier greedy/`search` approach latched
+        onto an inner fence and returned a fragment with no scene headings.
+        """
         text = reply.strip()
-        fenced = re.search(r"```(?:markdown|md)?[ \t]*\n(.*?)```", text, re.S | re.I)
-        if fenced:
-            text = fenced.group(1).strip()
+        if text.startswith("```") and text.endswith("```") and len(text) > 6:
+            nl = text.find("\n")
+            lang = text[3:nl].strip().lower() if nl != -1 else "?"
+            if nl != -1 and lang in ("", "markdown", "md"):
+                text = text[nl + 1:-3].strip()
         idx = text.find("---")                     # drop any prose before the front-matter
         if idx > 0 and text[:idx].strip():
             text = text[idx:]

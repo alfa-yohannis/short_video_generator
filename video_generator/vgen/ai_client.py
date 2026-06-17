@@ -21,14 +21,33 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import shutil
 import subprocess
+import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import List, Optional
 
 from . import config
 from .progress import progress
+
+
+# Transient API/CLI failures worth retrying with backoff rather than aborting a
+# whole (often multi-minute) build: server overload (529), rate limits (429),
+# and 5xx gateway blips. Matched case-insensitively against the CLI's error text.
+AI_MAX_ATTEMPTS = 4
+AI_RETRY_BASE_DELAY = 4.0  # seconds; doubles each retry (4 → 8 → 16 …), + jitter
+_TRANSIENT_MARKERS = (
+    "529", "overloaded", "429", "rate limit", "rate_limit",
+    "502", "503", "504", "service unavailable", "internal server error",
+    "bad gateway", "gateway timeout", "try again",
+)
+
+
+def _is_transient_error(detail: str) -> bool:
+    low = detail.lower()
+    return any(marker in low for marker in _TRANSIENT_MARKERS)
 
 
 class AiClient(ABC):
@@ -73,15 +92,32 @@ class AiClient(ABC):
     # --- Template method: every CLI runs the same way, only the command differs.
 
     def _run(self, command: List[str], prompt: str) -> str:
-        proc = subprocess.run(command, input=prompt, capture_output=True, text=True)
-        if proc.returncode != 0:
+        detail = "(no output)"
+        returncode = 1
+        for attempt in range(1, AI_MAX_ATTEMPTS + 1):
+            proc = subprocess.run(command, input=prompt, capture_output=True, text=True)
+            if proc.returncode == 0:
+                return proc.stdout.strip()
+            returncode = proc.returncode
             detail = (proc.stdout or "").strip() or (proc.stderr or "").strip() or "(no output)"
-            raise SystemExit(
-                f"{self.name} CLI failed (exit {proc.returncode}). Output: {detail}\n"
-                f"If this says 'Not logged in', run `{command[0]} /login` once to "
-                "authenticate before retrying."
-            )
-        return proc.stdout.strip()
+            # Retry only transient server-side blips (529 / rate limit / 5xx); a
+            # real failure (not logged in, bad prompt) fails fast on attempt 1.
+            if _is_transient_error(detail) and attempt < AI_MAX_ATTEMPTS:
+                wait = AI_RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                wait += random.uniform(0.0, wait * 0.25)  # jitter, avoids thundering herd
+                progress.log(
+                    f"    {self.name} transient error "
+                    f"(attempt {attempt}/{AI_MAX_ATTEMPTS}); retrying in {wait:.0f}s… "
+                    f"[{detail.splitlines()[0][:100]}]"
+                )
+                time.sleep(wait)
+                continue
+            break
+        raise SystemExit(
+            f"{self.name} CLI failed (exit {returncode}). Output: {detail}\n"
+            f"If this says 'Not logged in', run `{command[0]} /login` once to "
+            "authenticate before retrying."
+        )
 
 
 class ClaudeClient(AiClient):

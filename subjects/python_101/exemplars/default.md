@@ -26,9 +26,10 @@ hint that the next scenes will type real Python and run it.
 
 ## What Is a Function (~25s)
 Type in a tiny function definition with the `def` keyword, a name, a parameter,
-and a `return`. Type-reveal each part and label the pieces in ACCENT: the `def`
-keyword, the function name, the parameter, and the returned value. Keep the code
-on one card.
+and a `return`. Type-reveal each part; as the narration names the `def` keyword,
+the function name, the parameter, and the returned value, briefly HIGHLIGHT that
+token in the code itself, rather than adding separate floating labels. Keep the
+code on one card.
 
 ## Calling the Function (~30s)
 Below the definition, type a call that passes an argument and prints the result.

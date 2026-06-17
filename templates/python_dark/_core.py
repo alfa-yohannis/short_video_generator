@@ -871,6 +871,40 @@ def highlight_lines(card: Code, indices, color=HIGHLIGHT,
                                 fill_color=color, fill_opacity=0.12)
 
 
+# --- Fixed code / output stage --------------------------------------------
+# A consistent two-panel layout for code-walkthrough scenes: the typed code card
+# always lands in the CODE slot and its program output in the OUTPUT slot — same
+# place, same bounded size in every scene — so the viewer's eye stays anchored
+# (an editor window + terminal you type into). The slot geometry is orientation-
+# specific (CODE_SLOT_* / OUTPUT_SLOT_* in _portrait.py / _landscape.py). Scenes
+# that show no code (a title card, a CTA) use neither and centre their content.
+
+def _place_in_slot(mob: Mobject, cx: float, top_y: float,
+                   max_w: float, max_h: float) -> Mobject:
+    """Scale `mob` to fit (max_w, max_h) and anchor it top-centred at the slot."""
+    if max_w and mob.width > max_w:
+        mob.scale(max_w / mob.width)
+    if max_h and mob.height > max_h:
+        mob.scale(max_h / mob.height)
+    mob.move_to([cx, top_y - mob.height / 2.0, 0])
+    return mob
+
+
+def place_code(card: Mobject) -> Mobject:
+    """Fit a `code_card` into the fixed CODE slot and anchor it there, so code
+    occupies the same region in every scene. Build, place, then type:
+    ``card = code_card(src); place_code(card); type_code(self, card)``."""
+    return _place_in_slot(card, CODE_SLOT_CX, CODE_SLOT_TOP,
+                          CODE_SLOT_W, CODE_SLOT_H)
+
+
+def place_output(panel: Mobject) -> Mobject:
+    """Fit a `console_panel` / `repl` into the fixed OUTPUT slot and anchor it
+    there, so program output occupies the same region in every scene."""
+    return _place_in_slot(panel, OUTPUT_SLOT_CX, OUTPUT_SLOT_TOP,
+                          OUTPUT_SLOT_W, OUTPUT_SLOT_H)
+
+
 # --- Typing animations (the python_dark signature) ------------------------
 # A typewriter reveal that reads like someone coding live. Two entry points:
 #   * type_text(mob, cursor=caret())  -> Animation for any Text/MarkupText
