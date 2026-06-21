@@ -114,8 +114,9 @@ class DurationFitter:
             (output / "scripts" / lang / f"{scene.basename}.txt").write_text(
                 new_text.strip() + "\n", encoding="utf-8")
             # Invalidate stale audio/srt so it regenerates from the shorter text.
+            # (Both live under audio/<lang>/ now.)
             (output / "audio" / lang / f"{scene.basename}.mp3").unlink(missing_ok=True)
-            (output / "subtitles" / lang / f"{scene.basename}.srt").unlink(missing_ok=True)
+            (output / "audio" / lang / f"{scene.basename}.srt").unlink(missing_ok=True)
             progress.log(f"    ↳ {lang}/{scene.basename}: "
                          f"{count_words(current)}→{count_words(new_text)} words")
             changed = True

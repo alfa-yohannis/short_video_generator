@@ -27,7 +27,7 @@ Services (one responsibility each; take their collaborators by injection)
     duration.py      DurationFitter               — keep under max_duration
     renderer.py      ManimRenderer                — scenes -> silent clips
     assembly.py      ClipAssembler                — mux / concat / merge srt
-    youtube.py       YouTubeMetadataWriter        — youtube.txt per language
+    youtube.py       YouTubeMetadataWriter        — final/*.txt metadata per orientation+lang
     dependencies.py  DependencyChecker            — verify tools are installed
 
 Orchestration

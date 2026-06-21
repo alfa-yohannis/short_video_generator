@@ -82,6 +82,12 @@ class Storyboard:
             return self.scenes_landscape_dir
         return self.scenes_portrait_dir
 
+    def final_stem(self, orientation: str, lang: str) -> str:
+        """Shared filename stem for a build's final artifacts —
+        ``<title>_<orientation>_<lang>``. The final mp4, png, srt and txt all
+        share this stem and land together in ``<output>/final/``."""
+        return f"{self.title}_{orientation}_{lang}"
+
     def to_markdown(self) -> str:
         """Serialize back to the storyboard markdown format.
 

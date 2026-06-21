@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/bin/python -m pytest tests/test_integration.py -q -m integration)",
+      "Bash(.venv/bin/python -m pytest tests/test_integration.py -q)",
+      "Bash(grep -n \"subtitles/\\\\|youtube/\\\\|thumbnails/\\\\|youtube\\\\.txt\\\\|python_101\\\\|python_dark\\\\|TITLE\\\\|DESCRIPTION\\\\|KEYWORDS\\\\|final/{id,en}\\\\|final/<\\\\|/<title>_\\\\|thumbnails/{\" README.md)",
+      "Bash(grep -n \"subtitles/\\\\|youtube/<\\\\|thumbnails/\\\\|youtube\\\\.txt\\\\|python_101\\\\|python_dark\\\\|^TITLE\\\\|^DESCRIPTION\\\\|^KEYWORDS\\\\|final/{id,en}\\\\|final/<lang>\" README.md)",
+      "Bash(.venv/bin/python -m pytest tests/ -q)"
+    ]
+  }
+}

@@ -148,7 +148,7 @@ YT_KEYWORDS_MAX = 500
 # Everything the generator itself creates under <output>. User-placed files
 # (a README, .gitignore, ...) are left untouched.
 WIPE_SUBDIRS = (
-    "scripts", "audio", "subtitles", "video", "clips", "final",
+    "scripts", "audio", "video", "clips", "final",
     "scenes_landscape", "scenes_portrait", "manim_media", "manim_check",
-    "assets", "youtube",
+    "assets",
 )

@@ -100,12 +100,12 @@ class TtsEngine(ABC):
         for lang in storyboard.languages:
             voice = self.voice_for(storyboard, lang)
             audio_dir = output / "audio" / lang
-            srt_dir = output / "subtitles" / lang
             audio_dir.mkdir(parents=True, exist_ok=True)
-            srt_dir.mkdir(parents=True, exist_ok=True)
             for scene in storyboard.scenes:
+                # The per-scene SRT lives beside its mp3 (audio/<lang>/), so there
+                # is no separate subtitles/ tree; the merged final SRT goes to final/.
                 mp3 = audio_dir / f"{scene.basename}.mp3"
-                srt = srt_dir / f"{scene.basename}.srt"
+                srt = audio_dir / f"{scene.basename}.srt"
                 if valid_audio(mp3) and srt.exists() and not force:
                     continue
                 progress.log(f"  {self.name} {voice} -> {lang}/{scene.basename}…")

@@ -1,9 +1,11 @@
-"""Writing YouTube publishing metadata (``youtube/<lang>/youtube.txt``).
+"""Writing YouTube publishing metadata (``final/<title>_<orient>_<lang>.txt``).
 
-`YouTubeMetadataWriter` asks the AI for a title / description / keywords block
-from a language's narration transcript, then *sanitises and clamps* each field
-to YouTube's limits with the small pure helpers in this module. It is a trailing
-nice-to-have: a failure here never aborts the build.
+`YouTubeMetadataWriter` asks the AI for a title / description / hashtags /
+keywords block from a language's narration transcript, then *sanitises and
+clamps* each field to YouTube's limits with the small pure helpers in this
+module. The result lands beside the final mp4/png/srt in ``final/`` (one file
+per orientation + language). It is a trailing nice-to-have: a failure here never
+aborts the build.
 """
 
 from __future__ import annotations
@@ -106,32 +108,41 @@ def extract_json(text: str) -> dict:
         return json.loads(match.group(0))
 
 
-def youtube_text(title: str, description: str, keywords: str) -> str:
-    """Render the final ``youtube.txt`` body."""
-    return (
-        f"TITLE\n{title.strip()}\n\n"
-        f"DESCRIPTION\n{description.strip()}\n\n"
-        f"KEYWORDS\n{keywords.strip()}\n"
-    )
+def youtube_text(title: str, description: str, hashtags: str, keywords: str) -> str:
+    """Render the final metadata ``.txt`` body.
+
+    The first line is the title ending with a period (no ``TITLE`` label). The
+    title, description, hashtags line, and keywords line are each separated by a
+    single blank line — there are no ``DESCRIPTION`` / ``KEYWORDS`` labels.
+    """
+    title = title.strip()
+    if title and not title.endswith("."):
+        title += "."
+    blocks = [title, description.strip(), hashtags.strip(), keywords.strip()]
+    return "\n\n".join(block for block in blocks if block) + "\n"
 
 
 def youtube_prompt(transcript: str, lang: str) -> str:
-    """The prompt asking the AI for title/description/keywords as one JSON object."""
+    """The prompt asking the AI for title/description/hashtags/keywords as JSON."""
     lang_name = {"id": "Indonesian", "en": "English"}.get(lang, lang)
     return (
         "You are writing YouTube publishing metadata for a narrated tutorial "
         f"video. Base it ONLY on the narration transcript below. Write the "
-        f'"title" and "description" in {lang_name}.\n\n'
+        f'"title", "description", and "hashtags" in {lang_name}.\n\n'
         'Return ONE JSON object with exactly these keys: "title", "description", '
-        '"keywords".\n'
+        '"hashtags", "keywords".\n'
         "- title: at most 100 characters; put the most important, searchable "
         "terms in the first ~70 characters; no emoji; NO hashtags.\n"
-        "- description: at most 5000 characters; no emoji. Start with a strong "
-        "hook in the first ~157 characters, then a short overview and a bulleted "
-        'list (plain "- " lines) of what the video covers. END with one final '
-        "line of 5 to 10 relevant hashtags as single words with no spaces "
-        "(e.g. #Pythagoras #Mathematics). Use at most 15 hashtags, and put "
-        "hashtags ONLY here in the description, never in the title.\n"
+        "- description: at most 5000 characters; no emoji; NO hashtags. Explain "
+        "the SUBJECT ITSELF — teach the actual concepts, definitions and ideas "
+        "from the narration as informative reference text the reader learns from. "
+        "Do NOT describe, summarise or promote the video: never write phrases like "
+        "'in this video', 'this tutorial', 'we will' or 'you will learn'. Write "
+        'directly about the topic. Plain "- " bullet lines are allowed for '
+        "sub-points.\n"
+        "- hashtags: 5 to 10 relevant hashtags on one line, each a single word "
+        "with no spaces starting with '#' (e.g. #Pythagoras #Mathematics); no "
+        "emoji.\n"
         "- keywords: a comma-separated list of plain tags (NO '#'); total length "
         "at most 500 characters; each tag at most 30 characters; mix "
         f"{lang_name} and English technical terms.\n\n"
@@ -141,22 +152,29 @@ def youtube_prompt(transcript: str, lang: str) -> str:
 
 
 class YouTubeMetadataWriter:
-    """Generates ``youtube/<lang>/youtube.txt`` for each language."""
+    """Generates ``final/<title>_<orient>_<lang>.txt`` for each language.
+
+    The metadata depends only on the narration (which is per language, not per
+    orientation), so it is generated once per language and written to every
+    orientation's file so each final video has a matching ``.txt`` beside it.
+    """
 
     def __init__(self, ai_client: AiClient) -> None:
         self.ai = ai_client
 
     def generate(self, storyboard: Storyboard, output: Path, force: bool) -> None:
-        """Write metadata per language. Never raises on AI/parse failure — the
-        video itself is unaffected."""
+        """Write metadata per orientation + language. Never raises on AI/parse
+        failure — the video itself is unaffected."""
+        final_dir = output / "final"
         for lang in storyboard.languages:
-            out_path = output / "youtube" / lang / "youtube.txt"
-            if out_path.exists() and not force:
-                print(f"  youtube/{lang}/youtube.txt exists — skipping (use --force)")
+            targets = [final_dir / f"{storyboard.final_stem(orient, lang)}.txt"
+                       for orient in storyboard.orientations]
+            if targets and all(t.exists() for t in targets) and not force:
+                print(f"  final/*_{lang}.txt exist — skipping youtube metadata (use --force)")
                 continue
             transcript = self._read_transcript(storyboard, output, lang)
             if not transcript:
-                print(f"  no narration for {lang} — skipping youtube.txt")
+                print(f"  no narration for {lang} — skipping youtube metadata")
                 continue
             try:
                 meta = extract_json(self.ai.generate(youtube_prompt(transcript, lang)))
@@ -165,16 +183,20 @@ class YouTubeMetadataWriter:
                       "skipping. The video itself is unaffected.")
                 continue
             title = clamp(strip_emoji_and_hashtags(str(meta.get("title", ""))), config.YT_TITLE_MAX)
-            desc = clamp(cap_hashtags(strip_emoji(str(meta.get("description", "")))), config.YT_DESC_MAX)
+            desc = clamp(strip_emoji_and_hashtags(str(meta.get("description", ""))), config.YT_DESC_MAX)
+            hashtags = cap_hashtags(strip_emoji(str(meta.get("hashtags", ""))))
             keywords = clamp_keywords(str(meta.get("keywords", "")), config.YT_KEYWORDS_MAX)
             if not title or not desc:
-                print(f"  AI returned empty title/description for {lang}; skipping youtube.txt")
+                print(f"  AI returned empty title/description for {lang}; skipping youtube metadata")
                 continue
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            out_path.write_text(youtube_text(title, desc, keywords), encoding="utf-8")
-            progress.log(f"  -> {out_path} (title {len(title)}/{config.YT_TITLE_MAX}, "
-                         f"desc {len(desc)}/{config.YT_DESC_MAX}, "
-                         f"keywords {len(keywords)}/{config.YT_KEYWORDS_MAX})")
+            body = youtube_text(title, desc, hashtags, keywords)
+            final_dir.mkdir(parents=True, exist_ok=True)
+            for target in targets:
+                target.write_text(body, encoding="utf-8")
+                progress.log(f"  -> {target} (title {len(title)}/{config.YT_TITLE_MAX}, "
+                             f"desc {len(desc)}/{config.YT_DESC_MAX}, "
+                             f"hashtags {len(hashtags)}, "
+                             f"keywords {len(keywords)}/{config.YT_KEYWORDS_MAX})")
 
     def _read_transcript(self, storyboard: Storyboard, output: Path, lang: str) -> str:
         """Concatenate a language's per-scene narration scripts in scene order."""

@@ -123,8 +123,10 @@ class VideoPipeline:
 
     def stage_srt(self) -> None:
         for lang in self.storyboard.languages:
-            merged = self.assembler.merge_subtitles(self.storyboard, self.output, lang)
-            progress.log(f"  -> {merged}")
+            for orient in self.storyboard.orientations:
+                merged = self.assembler.merge_subtitles(self.storyboard, self.output,
+                                                        lang, orient)
+                progress.log(f"  -> {merged}")
 
     def stage_thumbnails(self) -> None:
         # A poster frame per (language, orientation): the first scene's last second.
@@ -152,7 +154,7 @@ class VideoPipeline:
             ("concat",  "[6/9] concat per-scene clips into final videos", self.stage_concat),
             ("thumbnails", "[7/9] thumbnails (first scene, last second)", self.stage_thumbnails),
             ("srt",     "[8/9] merge per-scene SRTs into final SRTs", self.stage_srt),
-            ("youtube", "[9/9] generate YouTube metadata (per language)", self.stage_youtube),
+            ("youtube", "[9/9] generate YouTube metadata (per orientation + language)", self.stage_youtube),
         ]
         for name, label, runner in plan:
             if stage not in ("all", name):

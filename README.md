@@ -171,19 +171,24 @@ After it finishes:
 /tmp/pythagorean_build/
 ├── scripts/{id,en}/<scene>.txt          ← narration text per language
 ├── audio/{id,en}/<scene>.mp3            ← TTS output
-├── subtitles/{id,en}/<scene>.srt
+├── audio/{id,en}/<scene>.srt            ← per-scene subtitles (beside the audio)
 ├── scenes_landscape/                     ← _common.py + per-scene .py
 ├── scenes_portrait/
 ├── assets/fonts/                         ← copied from templates
 ├── manim_media/{id,en}/{landscape,portrait}/
 ├── video/{id,en}/{landscape,portrait}/<scene>.mp4
 ├── clips/{id,en}/{landscape,portrait}/<scene>.mp4
-├── final/{id,en}/<title>_landscape.mp4
-├── final/{id,en}/<title>_portrait.mp4
-├── thumbnails/{id,en}_{landscape,portrait}.png  ← poster: first scene, last second
-├── subtitles/{id,en}/<title>.srt         ← merged with proper timestamps
-└── youtube/{id,en}/youtube.txt           ← title / description / keywords per language
+└── final/                                ← every deliverable, one shared stem per orientation+language:
+    ├── <title>_<orientation>_<language>.mp4   ← final video
+    ├── <title>_<orientation>_<language>.srt   ← merged subtitles, proper offsets
+    ├── <title>_<orientation>_<language>.png   ← thumbnail (first scene, last second)
+    └── <title>_<orientation>_<language>.txt   ← YouTube title / description / hashtags / keywords
 ```
+
+So a single `final/` folder holds the four deliverables for each video, all sharing
+the `<title>_<orientation>_<language>` stem (e.g. `pythagorean_theorem_portrait_en.mp4`
++ `.srt` + `.png` + `.txt`). There is no separate `youtube/`, `thumbnails/`, or
+`subtitles/` directory.
 
 ---
 
@@ -194,14 +199,14 @@ Run everything (default) or just one stage with `--stage`:
 | Stage | What it does |
 | --- | --- |
 | `scripts` | Fill in any missing narration via the AI CLI; write `scripts/<lang>/*.txt` |
-| `audio`   | Run the TTS engine on each script; write `audio/<lang>/*.mp3` + per-scene `subtitles/<lang>/*.srt` |
+| `audio`   | Run the TTS engine on each script; write `audio/<lang>/*.mp3` + per-scene `audio/<lang>/*.srt` |
 | `scenes`  | Materialize `scenes_<orient>/_common.py` from templates and AI-generate any missing per-scene `.py` files |
 | `render`  | Run Manim with `MANIM_LANG=<lang>` and `MANIM_AUDIO_DIR=<output>/audio` for each (lang, orientation) pair |
 | `mux`     | Combine raw video + MP3 into per-scene clips at 48 kHz stereo AAC |
-| `concat`  | Concat clips into `final/<lang>/<title>_<orient>.mp4` |
-| `thumbnails` | Save a poster frame per (lang, orientation) — the first scene's last second — to `thumbnails/<lang>_<orient>.png` |
-| `srt`     | Merge per-scene SRTs into `subtitles/<lang>/<title>.srt` with proper offsets |
-| `youtube` | Ask the AI CLI for YouTube title/description/keywords per language; write `youtube/<lang>/youtube.txt` |
+| `concat`  | Concat clips into `final/<title>_<orient>_<lang>.mp4` |
+| `thumbnails` | Save a poster frame per (orientation, language) — the first scene's last second — to `final/<title>_<orient>_<lang>.png` |
+| `srt`     | Merge per-scene SRTs into `final/<title>_<orient>_<lang>.srt` with proper offsets |
+| `youtube` | Ask the AI CLI for YouTube title/description/hashtags/keywords per language; write `final/<title>_<orient>_<lang>.txt` |
 | `all`     | (default) all of the above, in order |
 
 ---
@@ -228,9 +233,9 @@ voice: default           # default | male | female | a voice id  (default: defau
 #   resolution: 1920x1080
 #   assets_dir: ./assets # folder of ready-made symbol SVGs + manifest.json;
 #                        # scenes load these real files (no --run-preparation)
-#   subject: generic     # subjects/<name>/ pack: design_patterns | archimate | togaf | python_101
+#   subject: generic     # subjects/<name>/ pack: design_patterns | archimate | togaf
 #                        # (drives scene guidance + helpers; see "Subjects & templates")
-#   template: default    # templates/<name>/ presentation scaffold (e.g. python_dark);
+#   template: default    # templates/<name>/ presentation scaffold;
 #                        # resolved repo-root templates/ first, then bundled
 ---
 
@@ -448,9 +453,6 @@ its own subject's helpers). Select one with `subject:` in the front-matter
 - **`archimate`** — loads the real ArchiMate `*_logo.svg` symbols and adds
   `archi_element` + the relationship-arrow helpers.
 - **`togaf`** — ADM process-flow tutorials.
-- **`python_101`** — beginner Python tutorials. Defaults to the dark
-  `python_dark` template (typewriter typing animations) and adds `console_panel`
-  / `repl` helpers for showing program output.
 
 Add a subject by dropping a folder (nothing else to wire up):
 
@@ -486,16 +488,8 @@ look is just a folder you drop in — no code change. An unknown name falls back
 may also ship its own `assets/` folder, merged into the build's `assets/` on top
 of the shared fonts/logo. At build time the chosen core + orientation delta + the
 active subject's helpers are composed into the single `_common.py` each scene
-imports.
-
-Shipped repo-root template:
-
-- **`python_dark`** — a dark code-editor theme (near-black canvas, Python
-  blue/yellow accents, window-framed code cards) with **typewriter typing
-  animations**: `type_text(mob, cursor=caret())` types any text glyph-by-glyph,
-  and `type_code(self, code_card(src))` reveals the editor window then types the
-  syntax-highlighted code character by character. Used by the `python_101`
-  subject; set `template: python_dark` to use it for any storyboard.
+imports. The built-in `default` is the only shipped template; the repo root has
+no `templates/` overrides until you add one.
 
 ### Bulk generation (`auto_generate.py`)
 
@@ -571,13 +565,13 @@ python3 video_generator/generate_video.py --storyboard SB.md --output OUT --forc
 | `--refine-storyboard` | off | Before building, let the AI rewrite an over-dense storyboard (trim/split/rebalance within the duration cap). Written to `<output>/storyboard.refined.md` — your original is untouched; if the plan changes, everything regenerates |
 | `--run-preparation` | off | Execute the storyboard's `# Preparation` block agentically before generating scenes (tools on + MCP), per its `preparation_profile:` (a `profiles/<name>.yaml`; default `generic`). The `archi` profile fetches ArchiMate symbols into `<output>/assets/archi/`, auto-launching Archi if its port is down. Best-effort; falls back to primitives. See [Preparation block](#preparation-block-optional) |
 | `--mcp-config PATH` | *(repo `.mcp.json`)* | `.mcp.json` the `--run-preparation` agent loads its MCP servers from |
-| `--skip-youtube` | off | Don't generate `youtube/<lang>/youtube.txt` |
+| `--skip-youtube` | off | Don't generate the `final/<title>_<orient>_<lang>.txt` metadata |
 | `--skip-dep-check` | off | Skip the startup dependency validation |
 | `--no-ai-cli-check` | off | Don't enforce AI CLI presence (every narration / scene `.py` pre-filled) |
 
 > `--force` removes only generator-owned subdirectories under `--output`
-> (`scripts/`, `audio/`, `subtitles/`, `video/`, `clips/`, `final/`,
-> `scenes_landscape/`, `scenes_portrait/`, `manim_media/`, `assets/`). Files you
+> (`scripts/`, `audio/`, `video/`, `clips/`, `final/`, `scenes_landscape/`,
+> `scenes_portrait/`, `manim_media/`, `manim_check/`, `assets/`). Files you
 > placed there yourself (a `.gitignore`, a README, etc.) are left alone.
 
 ---
@@ -714,26 +708,30 @@ the AI to redesign an offending scene rather than mechanically squeeze it.
 ## YouTube metadata
 
 The final `youtube` stage asks the configured AI CLI to write publishing
-metadata from each language's narration transcript, and writes one file per
-language at `youtube/<lang>/youtube.txt`:
+metadata from each language's narration transcript. The metadata depends only on
+the narration (not the orientation), so it's generated once per language and
+written next to each final video as `final/<title>_<orient>_<lang>.txt`. The file
+has **no field labels** — just four blocks separated by a single blank line:
 
 ```
-TITLE
-<= 100 chars, searchable terms first, no hashtags
+<title — searchable terms first, no hashtags, ending with a period>
 
-DESCRIPTION
-hook + overview + bulleted coverage, ending with <=15 #hashtags
+<description — explains the SUBJECT ITSELF (the concepts and ideas), not the video>
 
-KEYWORDS
-comma-separated tags, <= 500 chars, no '#'
+<5–10 #hashtags on one line>
+
+<comma-separated keywords, no '#'>
 ```
 
-Each field is sanitised and clamped to YouTube's limits (title 100, description
-5000, keywords 500), emoji are stripped, and description hashtags are capped at
-15 (YouTube ignores them all past 15). It's a trailing nice-to-have: an AI/parse
-failure logs a warning and is skipped — the video itself is unaffected. Disable
-with `--skip-youtube`, or run it alone with `--stage youtube` once narration
-scripts exist.
+The first line is the plain title (ending with a period); the description teaches
+the actual topic as reference text rather than promoting the video (no "in this
+video" / "you will learn" phrasing); the hashtags get their own line; and the
+keywords come last. Each field is sanitised and clamped to YouTube's limits
+(title 100, description 5000, keywords 500), emoji are stripped, and the hashtags
+line is capped at 15 (YouTube ignores them all past 15). It's a trailing
+nice-to-have: an AI/parse failure logs a warning and is skipped — the video
+itself is unaffected. Disable with `--skip-youtube`, or run it alone with
+`--stage youtube` once narration scripts exist.
 
 ---
 

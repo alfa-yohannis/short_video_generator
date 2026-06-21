@@ -118,7 +118,7 @@ def build_parser() -> argparse.ArgumentParser:
              "root .mcp.json). Only used with --run-preparation.",
     )
     parser.add_argument("--skip-youtube", action="store_true",
-                        help="Don't generate youtube/<lang>/youtube.txt")
+                        help="Don't generate the final/<title>_<orient>_<lang>.txt metadata")
     parser.add_argument("--skip-dep-check", action="store_true",
                         help="Don't validate / auto-install dependencies before building")
     parser.add_argument("--no-ai-cli-check", action="store_true",

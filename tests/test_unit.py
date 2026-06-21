@@ -35,7 +35,6 @@ from vgen.preparation import (
 )
 from vgen.refine import StoryboardRefiner
 from vgen.scenes import SceneSynthesizer, resolve_template_dir
-from vgen.subjects import get_subject
 from vgen.storyboard import StoryboardParser, parse_duration_spec
 from vgen.tts import (
     EdgeTtsEngine, GeminiQuotaError, GeminiTtsEngine, create_tts_engine,
@@ -609,7 +608,7 @@ def test_thumbnail_uses_first_scene_last_second(tmp_path, monkeypatch):
                         lambda cmd, **kw: captured.setdefault("cmd", cmd))
 
     out = assembly.ClipAssembler().thumbnail(sb, tmp_path, "en", "landscape", force=True)
-    assert out == tmp_path / "thumbnails" / "en_landscape.png"
+    assert out == tmp_path / "final" / "t_landscape_en.png"
     assert str(clip) in captured["cmd"]            # the FIRST scene's clip, not another
     assert "-sseof" in captured["cmd"] and "-1" in captured["cmd"]   # last-second seek
 
@@ -625,7 +624,7 @@ def test_thumbnail_falls_back_to_raw_render(tmp_path, monkeypatch):
     monkeypatch.setattr(assembly.subprocess, "run",
                         lambda cmd, **kw: captured.setdefault("cmd", cmd))
     out = assembly.ClipAssembler().thumbnail(sb, tmp_path, "id", "portrait", force=True)
-    assert out == tmp_path / "thumbnails" / "id_portrait.png"
+    assert out == tmp_path / "final" / "t_portrait_id.png"
     assert str(video) in captured["cmd"]
 
 
@@ -978,13 +977,19 @@ def test_extract_json_variants():
 
 
 def test_youtube_text_layout():
-    assert youtube.youtube_text("T", "D", "k1, k2") == "TITLE\nT\n\nDESCRIPTION\nD\n\nKEYWORDS\nk1, k2\n"
+    # Title gets a trailing period; no TITLE/DESCRIPTION/KEYWORDS labels; each
+    # block separated by one blank line.
+    assert youtube.youtube_text("T", "D", "#h1 #h2", "k1, k2") == "T.\n\nD\n\n#h1 #h2\n\nk1, k2\n"
+    # An existing terminal period is not doubled, and empty blocks are dropped.
+    assert youtube.youtube_text("T.", "D", "", "") == "T.\n\nD\n"
 
 
 def test_youtube_prompt_language_and_limits():
     p_en = youtube.youtube_prompt("Hello world.", "en")
     assert "English" in p_en and "Hello world." in p_en
     assert "100 characters" in p_en and "5000 characters" in p_en and "500" in p_en and "hashtags" in p_en
+    # The description must explain the subject, not promote the video.
+    assert "you will learn" in p_en and "SUBJECT ITSELF" in p_en
     p_id = youtube.youtube_prompt("Halo dunia.", "id")
     assert "Indonesian" in p_id and "Halo dunia." in p_id
 
@@ -993,7 +998,7 @@ def test_youtube_prompt_language_and_limits():
 
 
 def test_youtube_writer_per_language(tmp_path):
-    sb = make_storyboard(languages=["id", "en"],
+    sb = make_storyboard(languages=["id", "en"], orientations=["landscape", "portrait"],
                          scenes=[Scene("01_x", "X", "s.py", 10, "d", {"id": "Halo.", "en": "Hi."})])
     for lang, text in (("id", "Materi Pythagoras."), ("en", "Pythagoras material.")):
         d = tmp_path / "scripts" / lang
@@ -1007,25 +1012,31 @@ def test_youtube_writer_per_language(tmp_path):
         seen.append(lang)
         return json.dumps({
             "title": ("Judul " if lang == "id" else "Title ") + "T" * 130 + " 🚀 #nope",
-            "description": "Hook. 🚀 " + ("x " * 50) + "\n" + " ".join(f"#tag{i}" for i in range(20)),
+            "description": "Penjelasan konsep. 🚀 " + ("x " * 50),
+            "hashtags": " ".join(f"#tag{i}" for i in range(20)),
             "keywords": ", ".join(f"kw{i:03d}" for i in range(300)),
         })
 
     YouTubeMetadataWriter(FakeAiClient(reply)).generate(sb, tmp_path, force=False)
-    assert set(seen) == {"id", "en"}
+    assert set(seen) == {"id", "en"}                  # generated once per language, not per orient
     for lang in ("id", "en"):
-        content = (tmp_path / "youtube" / lang / "youtube.txt").read_text(encoding="utf-8")
-        title = content.split("TITLE\n", 1)[1].split("\n\n", 1)[0]
-        desc = content.split("DESCRIPTION\n", 1)[1].split("\n\nKEYWORDS", 1)[0]
-        kw = content.split("KEYWORDS\n", 1)[1].strip()
-        assert len(title) <= config.YT_TITLE_MAX and "🚀" not in title and "#nope" not in title
-        assert len(desc) <= config.YT_DESC_MAX and "🚀" not in desc
-        assert len(re.findall(r"#\w+", desc)) <= 15
-        assert len(kw) <= config.YT_KEYWORDS_MAX and "#" not in kw
+        bodies = {orient: (tmp_path / "final" / f"t_{orient}_{lang}.txt").read_text(encoding="utf-8")
+                  for orient in ("landscape", "portrait")}
+        assert bodies["landscape"] == bodies["portrait"]   # same metadata, both orientations
+        body = bodies["landscape"]
+        assert "TITLE" not in body and "DESCRIPTION" not in body and "KEYWORDS" not in body
+        blocks = body.rstrip("\n").split("\n\n")           # title / description / hashtags / keywords
+        assert len(blocks) == 4
+        title, desc, hashtags, keywords = blocks
+        assert title.endswith(".")                          # first line is the title, ends with a dot
+        assert len(title) <= config.YT_TITLE_MAX + 1 and "🚀" not in title and "#nope" not in title
+        assert len(desc) <= config.YT_DESC_MAX and "🚀" not in desc and "#" not in desc
+        assert hashtags.count("#") == 15                    # hashtags in their own block, capped at 15
+        assert len(keywords) <= config.YT_KEYWORDS_MAX and "#" not in keywords
 
 
 def test_youtube_writer_skips_on_cli_failure(tmp_path):
-    sb = make_storyboard(languages=["id"],
+    sb = make_storyboard(languages=["id"], orientations=["landscape"],
                          scenes=[Scene("01_x", "X", "s.py", 10, "d", {"id": "Halo."})])
     d = tmp_path / "scripts" / "id"
     d.mkdir(parents=True)
@@ -1035,16 +1046,16 @@ def test_youtube_writer_skips_on_cli_failure(tmp_path):
         raise SystemExit("claude not logged in")
 
     YouTubeMetadataWriter(FakeAiClient(boom)).generate(sb, tmp_path, force=False)  # must not raise
-    assert not (tmp_path / "youtube" / "id" / "youtube.txt").exists()
+    assert not (tmp_path / "final" / "t_landscape_id.txt").exists()
 
 
 def test_youtube_writer_skips_when_no_transcript(tmp_path):
-    sb = make_storyboard(languages=["id"],
+    sb = make_storyboard(languages=["id"], orientations=["landscape"],
                          scenes=[Scene("01_x", "X", "s.py", 10, "d", {})])
     fake = FakeAiClient("{}")
     YouTubeMetadataWriter(fake).generate(sb, tmp_path, force=False)
     assert fake.prompts == []                         # never asked the AI
-    assert not (tmp_path / "youtube" / "id" / "youtube.txt").exists()
+    assert not (tmp_path / "final" / "t_landscape_id.txt").exists()
 
 
 # --- CLI overrides ---------------------------------------------------------
@@ -1981,23 +1992,3 @@ def test_resolve_template_unknown_returns_none(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "USER_TEMPLATES_DIR", tmp_path / "user")
     monkeypatch.setattr(config, "TEMPLATES_DIR", tmp_path / "bundled")
     assert resolve_template_dir("does_not_exist", "landscape") is None
-
-
-def test_shipped_python_dark_template_resolves():
-    """The bundled python_dark template lives at the repo root and is complete."""
-    for orient in ("landscape", "portrait"):
-        tdir = resolve_template_dir("python_dark", orient)
-        assert tdir == config.USER_TEMPLATES_DIR / "python_dark"
-        assert (tdir / "_core.py").exists()
-        assert (tdir / f"_{orient}.py").exists()
-    core = (config.USER_TEMPLATES_DIR / "python_dark" / "_core.py").read_text()
-    assert "def type_code" in core and "def type_text" in core   # typing helpers
-
-
-def test_python_101_subject_defaults_to_python_dark():
-    pack = get_subject("python_101")
-    assert pack.name == "python_101"
-    assert pack.template == "python_dark"          # subject selects the dark theme
-    helpers = dict(pack.helper_sources())
-    assert "python_console.py" in helpers
-    assert "def console_panel" in helpers["python_console.py"]

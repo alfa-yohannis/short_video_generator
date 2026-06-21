@@ -71,9 +71,8 @@ def test_gemini_engine_skips_when_present(tmp_path, monkeypatch):
                          tts_provider="gemini", gemini_api_key="key",
                          scenes=[_scene("01_x")])
     (tmp_path / "audio" / "id").mkdir(parents=True)
-    (tmp_path / "subtitles" / "id").mkdir(parents=True)
     silent_mp3(tmp_path / "audio" / "id" / "01_x.mp3", seconds=1.0)
-    (tmp_path / "subtitles" / "id" / "01_x.srt").write_text(
+    (tmp_path / "audio" / "id" / "01_x.srt").write_text(
         "1\n00:00:00,000 --> 00:00:01,000\nHalo\n", encoding="utf-8")
 
     def boom(*a, **k):
@@ -115,7 +114,7 @@ def test_mux_and_concat_pipeline(tmp_path):
     assert (clip_dir / "01_a.mp4").exists() and (clip_dir / "02_b.mp4").exists()
 
     final = assembler.concat(sb, tmp_path, lang, orient)
-    assert final.exists() and final.name == "demo_landscape.mp4"
+    assert final.exists() and final.name == "demo_landscape_id.mp4"
     assert media.ffprobe_duration(final) == pytest.approx(2.0, abs=0.4)
 
 
@@ -131,17 +130,18 @@ def test_merge_subtitles_offsets_across_scenes(tmp_path):
     import srt as _srt
     sb = make_storyboard(title="demo", languages=["id"], orientations=["landscape"],
                          scenes=[_scene("01_a"), _scene("02_b")])
-    lang = "id"
-    clip_dir = tmp_path / "clips" / lang / "landscape"
-    srt_dir = tmp_path / "subtitles" / lang
+    lang, orient = "id", "landscape"
+    clip_dir = tmp_path / "clips" / lang / orient
+    audio_dir = tmp_path / "audio" / lang          # per-scene SRTs live beside the audio now
     clip_dir.mkdir(parents=True)
-    srt_dir.mkdir(parents=True)
+    audio_dir.mkdir(parents=True)
     for sc in sb.scenes:
         color_video(clip_dir / f"{sc.basename}.mp4", seconds=1.0)
-        (srt_dir / f"{sc.basename}.srt").write_text(
+        (audio_dir / f"{sc.basename}.srt").write_text(
             f"1\n00:00:00,000 --> 00:00:00,800\n{sc.basename}\n", encoding="utf-8")
 
-    out = ClipAssembler().merge_subtitles(sb, tmp_path, lang)
+    out = ClipAssembler().merge_subtitles(sb, tmp_path, lang, orient)
+    assert out == tmp_path / "final" / "demo_landscape_id.srt"
     cues = list(_srt.parse(out.read_text(encoding="utf-8")))
     assert len(cues) == 2
     assert cues[1].start.total_seconds() >= cues[0].end.total_seconds()
@@ -162,5 +162,5 @@ def test_edge_audio_generation_live(tmp_path):
     EdgeTtsEngine().synthesize_storyboard(sb, tmp_path, force=False)
     mp3 = tmp_path / "audio" / "id" / "01_x.mp3"
     assert mp3.exists() and mp3.stat().st_size > 0
-    assert (tmp_path / "subtitles" / "id" / "01_x.srt").exists()
+    assert (tmp_path / "audio" / "id" / "01_x.srt").exists()
     assert media.ffprobe_duration(mp3) > 0.5

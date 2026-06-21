@@ -55,9 +55,9 @@ class ClipAssembler:
                force: bool = False) -> Path:
         """Concatenate a language+orientation's clips into one final video."""
         clip_dir = output / "clips" / lang / orient
-        final_dir = output / "final" / lang
+        final_dir = output / "final"
         final_dir.mkdir(parents=True, exist_ok=True)
-        final_path = final_dir / f"{storyboard.title}_{orient}.mp4"
+        final_path = final_dir / f"{storyboard.final_stem(orient, lang)}.mp4"
         clips = [clip_dir / f"{sc.basename}.mp4" for sc in storyboard.scenes]
         # Skip the re-encode when the final is already newer than every clip.
         if not force and is_up_to_date(final_path, *clips):
@@ -82,7 +82,8 @@ class ClipAssembler:
     def thumbnail(self, storyboard: Storyboard, output: Path, lang: str, orient: str,
                   force: bool = False) -> Optional[Path]:
         """Save a poster frame for one (language, orientation): a still from the
-        last second of the FIRST scene's clip, at ``thumbnails/<lang>_<orient>.png``.
+        last second of the FIRST scene's clip, at
+        ``final/<title>_<orient>_<lang>.png`` (alongside the final mp4/srt/txt).
 
         Uses the muxed per-scene clip (falls back to the raw render). Returns the
         thumbnail path, or ``None`` if there's no scene/source to grab from.
@@ -95,9 +96,9 @@ class ClipAssembler:
             source = output / "video" / lang / orient / f"{first}.mp4"
         if not source.exists():
             return None
-        thumb_dir = output / "thumbnails"
-        thumb_dir.mkdir(parents=True, exist_ok=True)
-        thumb = thumb_dir / f"{lang}_{orient}.png"
+        final_dir = output / "final"
+        final_dir.mkdir(parents=True, exist_ok=True)
+        thumb = final_dir / f"{storyboard.final_stem(orient, lang)}.png"
         if not force and is_up_to_date(thumb, source):
             return thumb
         # -sseof -1 seeks to one second before the end, then grab a single frame.
@@ -108,19 +109,25 @@ class ClipAssembler:
         )
         return thumb
 
-    def merge_subtitles(self, storyboard: Storyboard, output: Path, lang: str) -> Path:
-        """Merge per-scene SRTs into one, offsetting each scene by the clip length."""
+    def merge_subtitles(self, storyboard: Storyboard, output: Path, lang: str,
+                        orient: str) -> Path:
+        """Merge per-scene SRTs into one, offsetting each scene by the clip length.
+
+        Per-scene SRTs live next to the audio (``audio/<lang>/<scene>.srt``); the
+        merged result lands in ``final/<title>_<orient>_<lang>.srt`` beside that
+        orientation's final mp4. The cues are orientation-independent, but each
+        scene is offset by *this* orientation's clip duration.
+        """
         import srt as srt_lib  # lazy import so a missing dependency can be installed
 
-        srt_dir = output / "subtitles" / lang
+        audio_dir = output / "audio" / lang
         merged: List = []
         offset = timedelta(0)
         index = 1
-        orient = "landscape" if "landscape" in storyboard.orientations else storyboard.orientations[0]
         for scene in storyboard.scenes:
             clip = output / "clips" / lang / orient / f"{scene.basename}.mp4"
             duration = timedelta(seconds=ffprobe_duration(clip))
-            srt_path = srt_dir / f"{scene.basename}.srt"
+            srt_path = audio_dir / f"{scene.basename}.srt"
             if srt_path.exists():
                 for cue in srt_lib.parse(srt_path.read_text(encoding="utf-8")):
                     merged.append(srt_lib.Subtitle(
@@ -131,6 +138,8 @@ class ClipAssembler:
                     ))
                     index += 1
             offset += duration
-        out_path = srt_dir / f"{storyboard.title}.srt"
+        final_dir = output / "final"
+        final_dir.mkdir(parents=True, exist_ok=True)
+        out_path = final_dir / f"{storyboard.final_stem(orient, lang)}.srt"
         out_path.write_text(srt_lib.compose(merged), encoding="utf-8")
         return out_path
