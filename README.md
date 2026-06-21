@@ -35,6 +35,12 @@ and the TTS engine are swappable.
   timing, default voice `id-ID-ArdiNeural`) or Google **Gemini TTS**
   (`--tts gemini`, nicer voices, needs an API key, estimated subtitle timing,
   default voice `Iapetus`).
+- **Gemini-for-Indonesian with an Edge safety net** (`--tts gemini_id`) — voices
+  the **Indonesian** narration with Gemini (`Iapetus`) but, if Gemini fails for
+  any reason (out of credit, rate limit, bad connection, missing key), **reproduces
+  that clip from scratch** on the free Edge Indonesian voice (`id-ID-ArdiNeural`).
+  Every other language stays on Edge. Best of both: nicer Indonesian audio when
+  Gemini is up, an always-free fallback when it isn't.
 - **Per-run voice selection** — `--voice` overrides the voice for every language,
   or set per-language voices in the storyboard's `voices:` map.
 - **Robust AI scene generation** — generated Manim sources are Pango-escaped
@@ -227,7 +233,8 @@ length: 2-3 minutes      # 3 minutes | 180 | 2:30 | 90s          (total length)
 voice: default           # default | male | female | a voice id  (default: default)
 # More options you can add:
 #   orientation: both    # landscape | portrait | both
-#   tts: edge            # edge | gemini      (gemini needs an API key)
+#   tts: edge            # edge | gemini | gemini_id   (gemini* need an API key;
+#                        # gemini_id = Indonesian on Gemini Iapetus, Edge fallback)
 #   ai: claude           # claude | codex
 #   fps: 30
 #   resolution: 1920x1080
@@ -521,6 +528,11 @@ python3 video_generator/generate_video.py --storyboard SB.md --output OUT
 python3 video_generator/generate_video.py --storyboard SB.md --output OUT \
     --tts gemini --voice Iapetus
 
+# Indonesian on Gemini (Iapetus) with the free Edge Indonesian voice as fallback;
+# English stays on Edge. Reproduces any failed Gemini clip on Edge automatically.
+python3 video_generator/generate_video.py --storyboard SB.md --output OUT \
+    --tts gemini_id
+
 # Codex narrator instead of Claude
 python3 video_generator/generate_video.py --storyboard SB.md --output OUT \
     --ai-cli codex
@@ -554,7 +566,7 @@ python3 video_generator/generate_video.py --storyboard SB.md --output OUT --forc
 | `--force` | off | Wipe generator-owned subdirs and rebuild from a clean slate |
 | `--ai-cli {claude,codex}` | `claude` | AI CLI for missing narration / scene `.py`. Overrides `ai_cli:` |
 | `--effort {low,medium,high,xhigh,max}` | `high` | Reasoning effort for the **Claude** AI CLI (pass `max` for the top tier). Ignored when `--ai-cli codex` |
-| `--tts {edge,gemini}` | *(front-matter)* | TTS provider. Overrides `tts_provider:` when set |
+| `--tts {edge,gemini,gemini_id}` | *(front-matter)* | TTS provider. Overrides `tts_provider:` when set. `gemini_id` voices Indonesian with Gemini (Iapetus) and reproduces a clip on the Edge Indonesian voice if Gemini fails; other languages stay on Edge |
 | `--voice NAME` | *(front-matter)* | Override the voice for every language this run |
 | `--orientation {landscape,portrait,both}` | `both` | Which orientation(s) to generate. `landscape`/`portrait` restrict the whole run to one; `both` uses the storyboard's `orientations:` (itself defaulting to both) |
 | `--gemini-api-key KEY` | *(env / .env)* | Gemini API key |
@@ -757,7 +769,13 @@ and are copied into each build's `assets/fonts/`, then registered with
   languages.
 - Gemini subtitle timing is **estimated** (narration split into sentences,
   allocated proportionally over the measured audio duration), whereas Edge timing
-  is exact (word-level). Expect coarser cues with `--tts gemini`.
+  is exact (word-level). Expect coarser cues with `--tts gemini`. With
+  `--tts gemini_id`, an Indonesian clip that **fell back** to Edge gets exact
+  word-level timing, while one voiced by Gemini keeps estimated timing — so a
+  single build's Indonesian cues can be a mix depending on which clips fell back.
+- `--tts gemini_id` never hard-fails on a missing/broken Gemini key: it logs
+  that Gemini is unavailable and voices Indonesian on Edge for the whole run.
+  (Plain `--tts gemini` still refuses to start without a key.)
 - For portrait, do not pass a custom resolution — the frame dims are baked into
   `templates/scenes_portrait/_common.py`.
 - The bottom 2/10 of the portrait frame is reserved for Reels/Shorts/TikTok

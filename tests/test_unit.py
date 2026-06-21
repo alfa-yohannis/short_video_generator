@@ -37,8 +37,9 @@ from vgen.refine import StoryboardRefiner
 from vgen.scenes import SceneSynthesizer, resolve_template_dir
 from vgen.storyboard import StoryboardParser, parse_duration_spec
 from vgen.tts import (
-    EdgeTtsEngine, GeminiQuotaError, GeminiTtsEngine, create_tts_engine,
-    gemini_error_message, is_daily_quota, request_gemini_audio, resolve_gemini_key,
+    EdgeTtsEngine, FallbackTtsEngine, GeminiQuotaError, GeminiTtsEngine,
+    TtsEngine, create_tts_engine, gemini_error_message, is_daily_quota,
+    request_gemini_audio, resolve_gemini_key,
 )
 from vgen.youtube import YouTubeMetadataWriter
 
@@ -490,6 +491,87 @@ def test_create_tts_engine_gemini_and_aliases(provider):
 def test_create_tts_engine_unknown_raises():
     with pytest.raises(SystemExit):
         create_tts_engine(make_storyboard(tts_provider="festival"))
+
+
+@pytest.mark.parametrize("provider", ["gemini_id", "gemini-id"])
+def test_create_tts_engine_gemini_id_builds_fallback(provider):
+    eng = create_tts_engine(make_storyboard(tts_provider=provider))
+    assert isinstance(eng, FallbackTtsEngine)
+    assert eng.primary_langs == {"id"}
+    assert isinstance(eng.primary, GeminiTtsEngine)        # Indonesian -> Gemini
+    assert isinstance(eng.fallback, EdgeTtsEngine)         # safety net -> Edge
+    assert eng.primary_voices["id"] == config.DEFAULT_GEMINI_VOICE          # Iapetus
+    assert eng.fallback_voices["id"] == config.DEFAULT_EDGE_VOICES["id"]    # id-ID-ArdiNeural
+
+
+# --- FallbackTtsEngine routing + fallback ----------------------------------
+
+
+class _RecordingTts(TtsEngine):
+    """A fake engine that records its calls and can be told to fail."""
+
+    def __init__(self, name, fail=False, prepare_fail=False):
+        self.name = name
+        self.fail = fail
+        self.prepare_fail = prepare_fail
+        self.calls = []          # (text, voice) per synthesize_one
+        self.prepared = False
+
+    def prepare(self, storyboard):
+        if self.prepare_fail:
+            raise SystemExit(f"{self.name} unavailable")
+        self.prepared = True
+
+    def voice_for(self, storyboard, lang):
+        return storyboard.voices.get(lang) or f"{self.name}:{lang}"
+
+    def synthesize_one(self, text, voice, mp3, srt):
+        self.calls.append((text, voice))
+        if self.fail:
+            raise RuntimeError(f"{self.name} boom")
+        mp3.write_bytes(b"x")
+        srt.write_text("1\n", encoding="utf-8")
+
+
+def _bilingual_sb():
+    return make_storyboard(
+        languages=["id", "en"], orientations=["landscape"], voices={},
+        scenes=[Scene("01_x", "X", "s.py", 10, "d", {"id": "Halo.", "en": "Hi."})])
+
+
+def _make_fallback(primary, fallback):
+    return FallbackTtsEngine(primary=primary, fallback=fallback, primary_langs=("id",),
+                             primary_voices={"id": "Iapetus"},
+                             fallback_voices={"id": "id-ID-ArdiNeural"})
+
+
+def test_fallback_routes_id_to_primary_en_to_fallback(tmp_path):
+    primary, fallback = _RecordingTts("gemini"), _RecordingTts("edge")
+    _make_fallback(primary, fallback).synthesize_storyboard(_bilingual_sb(), tmp_path, force=False)
+    assert primary.calls == [("Halo.", "Iapetus")]                 # id voiced by Gemini Iapetus
+    assert fallback.calls == [("Hi.", "edge:en")]                  # en straight to Edge
+    assert (tmp_path / "audio" / "id" / "01_x.mp3").exists()
+    assert (tmp_path / "audio" / "en" / "01_x.mp3").exists()
+
+
+def test_fallback_reproduces_id_on_primary_error(tmp_path):
+    primary, fallback = _RecordingTts("gemini", fail=True), _RecordingTts("edge")
+    _make_fallback(primary, fallback).synthesize_storyboard(_bilingual_sb(), tmp_path, force=False)
+    assert primary.calls == [("Halo.", "Iapetus")]                 # Gemini was attempted…
+    # …then the id clip is reproduced on Edge, and en uses Edge directly.
+    assert ("Halo.", "id-ID-ArdiNeural") in fallback.calls
+    assert ("Hi.", "edge:en") in fallback.calls
+    assert (tmp_path / "audio" / "id" / "01_x.mp3").read_bytes() == b"x"   # Edge output landed
+
+
+def test_fallback_when_primary_unavailable_uses_fallback_for_all(tmp_path):
+    primary, fallback = _RecordingTts("gemini", prepare_fail=True), _RecordingTts("edge")
+    eng = _make_fallback(primary, fallback)
+    eng.synthesize_storyboard(_bilingual_sb(), tmp_path, force=False)
+    assert eng.primary_ready is False                              # disabled in prepare()
+    assert primary.calls == []                                     # never attempted
+    assert ("Halo.", "id-ID-ArdiNeural") in fallback.calls         # id falls back too
+    assert ("Hi.", "edge:en") in fallback.calls
 
 
 # --- EdgeTtsEngine retry ---------------------------------------------------

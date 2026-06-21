@@ -45,10 +45,13 @@ def build_parser() -> argparse.ArgumentParser:
              "Ignored when --ai-cli is codex.",
     )
     parser.add_argument(
-        "--tts", choices=["edge", "gemini"], default=None,
+        "--tts", choices=["edge", "gemini", "gemini_id"], default=None,
         help="Text-to-speech provider. edge is free/no-key with exact subtitle "
              "timing (default voice Ardi); gemini needs an API key and gives nicer "
-             "voices with estimated subtitle timing (default voice Iapetus). "
+             "voices with estimated subtitle timing (default voice Iapetus); "
+             "gemini_id voices Indonesian with Gemini (Iapetus) but reproduces a "
+             "clip on the free Edge Indonesian voice if Gemini fails, while every "
+             "other language stays on Edge. "
              "Overrides 'tts_provider' in the storyboard front-matter when set.",
     )
     parser.add_argument(

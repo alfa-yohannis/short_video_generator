@@ -8,12 +8,15 @@ scene per language — but get there very differently, so each is a strategy:
     TtsEngine (abstract)
       ├── EdgeTtsEngine     <- shells out to the `edge-tts` CLI, retries on
       │                        flaky network errors
-      └── GeminiTtsEngine   <- calls a REST API, decodes PCM -> MP3 with ffmpeg,
-                               and estimates the subtitle timing
+      ├── GeminiTtsEngine   <- calls a REST API, decodes PCM -> MP3 with ffmpeg,
+      │                        and estimates the subtitle timing
+      └── FallbackTtsEngine <- routes chosen languages to a primary engine and
+                               regenerates the clip on a secondary if it fails
 
 The pipeline only knows about :meth:`TtsEngine.synthesize_storyboard`; the
 ``create_tts_engine`` factory picks the concrete class from the storyboard.
-The base class provides the shared loop (the *template method*); subclasses
+The base class provides the shared loop (the *template method*) and delegates the
+per-clip, language-aware work to :meth:`TtsEngine.synthesize_scene`; subclasses
 fill in the one-clip behaviour and an optional ``prepare`` step.
 """
 
@@ -93,12 +96,13 @@ class TtsEngine(ABC):
     def synthesize_storyboard(self, storyboard, output: Path, force: bool) -> None:
         """Template method: produce an mp3 + srt for every (language, scene).
 
-        The loop, the "skip what's already done" check and the logging are the
-        same for every engine; only :meth:`synthesize_one` differs.
+        The loop and the "skip what's already done" check are the same for every
+        engine; the per-clip work is delegated to :meth:`synthesize_scene` (which
+        is language-aware, so an engine can route a language to a different
+        provider or add a fallback).
         """
         self.prepare(storyboard)
         for lang in storyboard.languages:
-            voice = self.voice_for(storyboard, lang)
             audio_dir = output / "audio" / lang
             audio_dir.mkdir(parents=True, exist_ok=True)
             for scene in storyboard.scenes:
@@ -108,11 +112,23 @@ class TtsEngine(ABC):
                 srt = audio_dir / f"{scene.basename}.srt"
                 if valid_audio(mp3) and srt.exists() and not force:
                     continue
-                progress.log(f"  {self.name} {voice} -> {lang}/{scene.basename}…")
                 started = time.monotonic()
-                self.synthesize_one(scene.narration[lang], voice, mp3, srt)
+                self.synthesize_scene(storyboard, lang, scene.basename,
+                                      scene.narration[lang], mp3, srt)
                 progress.log(f"    ↳ {lang}/{scene.basename}.mp3 in "
                              f"{time.monotonic() - started:.1f}s")
+
+    def synthesize_scene(self, storyboard, lang: str, basename: str, text: str,
+                         mp3: Path, srt: Path) -> None:
+        """Synthesize one (language, scene) clip.
+
+        Default behaviour: resolve this engine's voice for the language, log it,
+        and delegate to :meth:`synthesize_one`. Subclasses that route per language
+        or add a fallback (see :class:`FallbackTtsEngine`) override this.
+        """
+        voice = self.voice_for(storyboard, lang)
+        progress.log(f"  {self.name} {voice} -> {lang}/{basename}…")
+        self.synthesize_one(text, voice, mp3, srt)
 
     @abstractmethod
     def synthesize_one(self, text: str, voice: str, mp3: Path, srt: Path) -> None:
@@ -337,11 +353,111 @@ class GeminiTtsEngine(TtsEngine):
 
 
 # =====================================================================
+# Fallback: a primary engine per language, dropping to a secondary on any error
+# =====================================================================
+
+class FallbackTtsEngine(TtsEngine):
+    """Routes chosen languages to a *primary* engine, regenerating the clip from
+    scratch with a *secondary* engine if the primary fails for any reason
+    (out of credit, rate limit, bad connection, missing key, …). Languages not
+    listed in ``primary_langs`` go straight to the secondary.
+
+    Built for the bilingual case "voice Indonesian with Gemini (Iapetus) but keep
+    the free Edge Indonesian voice as the safety net, while English stays on
+    Edge": ``primary=GeminiTtsEngine``, ``fallback=EdgeTtsEngine``,
+    ``primary_langs=("id",)``.
+
+    Voices are resolved per side so an Edge voice in the storyboard never leaks
+    into the Gemini request (or vice-versa): a routed language uses
+    ``primary_voices``/``fallback_voices`` (falling back to each engine's own
+    ``voice_for``); a non-routed language uses the secondary's ``voice_for`` (so
+    a storyboard/CLI ``voices:`` entry still applies there).
+    """
+
+    name = "fallback"
+
+    def __init__(self, primary: TtsEngine, fallback: TtsEngine,
+                 primary_langs, primary_voices: Optional[dict] = None,
+                 fallback_voices: Optional[dict] = None) -> None:
+        self.primary = primary
+        self.fallback = fallback
+        self.primary_langs = set(primary_langs)
+        self.primary_voices = dict(primary_voices or {})
+        self.fallback_voices = dict(fallback_voices or {})
+        self.primary_ready = True            # flipped off if primary.prepare() fails
+
+    def prepare(self, storyboard) -> None:
+        # The secondary is the safety net — it must be available.
+        self.fallback.prepare(storyboard)
+        # The primary is best-effort: if its setup fails (e.g. no API key), don't
+        # abort the build — disable it so every routed clip uses the secondary.
+        try:
+            self.primary.prepare(storyboard)
+            self.primary_ready = True
+        except (Exception, SystemExit) as exc:  # noqa: BLE001
+            self.primary_ready = False
+            langs = ", ".join(sorted(self.primary_langs))
+            progress.log(f"  {self.primary.name} unavailable ({_brief(exc)}); "
+                         f"{langs} will use {self.fallback.name}.")
+
+    def voice_for(self, storyboard, lang: str) -> str:
+        """The voice that will actually produce this language's audio."""
+        if lang in self.primary_langs:
+            if self.primary_ready:
+                return self._primary_voice(storyboard, lang)
+            return self._fallback_voice(storyboard, lang)   # primary disabled — Edge voice
+        return self.fallback.voice_for(storyboard, lang)
+
+    def _primary_voice(self, storyboard, lang: str) -> str:
+        return self.primary_voices.get(lang) or self.primary.voice_for(storyboard, lang)
+
+    def _fallback_voice(self, storyboard, lang: str) -> str:
+        return self.fallback_voices.get(lang) or self.fallback.voice_for(storyboard, lang)
+
+    def synthesize_scene(self, storyboard, lang: str, basename: str, text: str,
+                         mp3: Path, srt: Path) -> None:
+        routed = lang in self.primary_langs
+        if routed and self.primary_ready:
+            voice = self._primary_voice(storyboard, lang)
+            progress.log(f"  {self.primary.name} {voice} -> {lang}/{basename}…")
+            try:
+                self.primary.synthesize_one(text, voice, mp3, srt)
+                return
+            except (Exception, SystemExit) as exc:  # noqa: BLE001 — any failure -> fall back
+                # Drop any partial output so the clip is reproduced from scratch.
+                mp3.unlink(missing_ok=True)
+                srt.unlink(missing_ok=True)
+                progress.log(f"    ⚠ {self.primary.name} failed for {lang}/{basename} "
+                             f"({_brief(exc)}); reproducing with {self.fallback.name}…")
+        # Fallback path: a routed language keeps its configured Edge voice; any
+        # other language uses the secondary engine's own (storyboard/CLI) voice.
+        voice = self._fallback_voice(storyboard, lang) if routed \
+            else self.fallback.voice_for(storyboard, lang)
+        progress.log(f"  {self.fallback.name} {voice} -> {lang}/{basename}…")
+        self.fallback.synthesize_one(text, voice, mp3, srt)
+
+    def synthesize_one(self, text: str, voice: str, mp3: Path, srt: Path) -> None:
+        # Not used by the loop (synthesize_scene routes per language), but the
+        # base class declares it abstract — delegate to the safety-net engine.
+        self.fallback.synthesize_one(text, voice, mp3, srt)
+
+
+def _brief(exc: BaseException) -> str:
+    """One-line ``Type: message`` summary of an exception, truncated for logs."""
+    return f"{type(exc).__name__}: {str(exc)[:120]}"
+
+
+# =====================================================================
 # Factory
 # =====================================================================
 
 # Legacy aliases kept for back-compat with older storyboards.
 GEMINI_ALIASES = {"gemini", "google", "google_chirp", "chirp"}
+
+# Indonesian via Gemini (Iapetus) with Edge Indonesian as the fallback; every
+# other language via Edge. The primary is best-effort — any Gemini error
+# (quota, rate limit, bad connection, missing key) reproduces that clip on Edge.
+GEMINI_ID_ALIASES = {"gemini_id", "gemini-id"}
 
 
 def create_tts_engine(storyboard) -> TtsEngine:
@@ -351,4 +467,12 @@ def create_tts_engine(storyboard) -> TtsEngine:
         return EdgeTtsEngine()
     if provider in GEMINI_ALIASES:
         return GeminiTtsEngine(model=storyboard.gemini_model)
+    if provider in GEMINI_ID_ALIASES:
+        return FallbackTtsEngine(
+            primary=GeminiTtsEngine(model=storyboard.gemini_model),
+            fallback=EdgeTtsEngine(),
+            primary_langs=("id",),
+            primary_voices={"id": config.DEFAULT_GEMINI_VOICE},      # Iapetus
+            fallback_voices={"id": config.DEFAULT_EDGE_VOICES["id"]},  # id-ID-ArdiNeural
+        )
     raise SystemExit(f"Unknown tts_provider '{provider}'.")

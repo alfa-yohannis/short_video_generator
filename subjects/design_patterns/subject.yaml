@@ -20,5 +20,8 @@ naming:
 storyboard:
   prompt_file: storyboard_prompt.md
   exemplar_file: exemplars/default.md
-cli_flags: [--tts, edge, --ai-cli, claude, --effort, xhigh,
+# Indonesian is voiced by Gemini (Iapetus) with the free Edge Indonesian voice as
+# an automatic fallback (out of credit / rate limit / no key -> reproduce on Edge);
+# English stays on Edge. Switch back to `--tts, edge` to force all-Edge audio.
+cli_flags: [--tts, gemini_id, --ai-cli, claude, --effort, xhigh,
             --refine-storyboard, --validate-scenes, --force]

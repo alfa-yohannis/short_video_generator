@@ -16,7 +16,7 @@ Foundations (pure helpers, no state)
 
 Strategy hierarchies (swappable behaviour behind one interface)
     ai_client.py     AiClient  <- ClaudeClient / CodexClient        (narrator)
-    tts.py           TtsEngine <- EdgeTtsEngine / GeminiTtsEngine    (voice)
+    tts.py           TtsEngine <- Edge / Gemini / Fallback engines   (voice)
 
 Services (one responsibility each; take their collaborators by injection)
     storyboard.py    StoryboardParser             — markdown -> Storyboard
