@@ -25,5 +25,5 @@ no,name,category,status,start_time,end_time
 24,Observer,GoF Behavioral,done,,
 25,State,GoF Behavioral,done,2026-06-21 16:00:01,2026-06-21 17:10:19
 26,Strategy,GoF Behavioral,done,,
-27,Template Method,GoF Behavioral,in progress,2026-06-21 20:18:05,
-28,Visitor,GoF Behavioral,,,
+27,Template Method,GoF Behavioral,done,2026-06-21 20:18:05,2026-06-21 21:22:54
+28,Visitor,GoF Behavioral,done,2026-06-21 21:44:31,2026-06-21 23:10:04
