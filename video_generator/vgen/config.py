@@ -76,10 +76,10 @@ DEFAULT_GEMINI_MODEL = "gemini-2.5-flash-preview-tts"
 # between 0.55 and 0.60: values ≤ 0.55 hang / return `finishReason: OTHER` with NO
 # audio — so every clip exhausts its retries and falls back to Edge (the old 0.1
 # caused exactly that "Gemini doesn't work"). 0.60 works (tested 3/3) and up.
-# 0.60 is the lowest usable value — best voice consistency — but sits right at the
-# edge, so the engine's retries + the gemini_id Edge fallback are the backstop for
-# a rare miss; raise toward 1.0 for more margin. Do NOT go ≤ 0.55.
-GEMINI_TTS_TEMPERATURE = 0.6
+# 0.60 is the lowest usable value but sits right at the edge; 1.0 keeps a safe
+# margin above the cliff (the conventional default) at a small cost to voice
+# consistency, which the style preamble below largely covers. Do NOT go ≤ 0.55.
+GEMINI_TTS_TEMPERATURE = 1.0
 GEMINI_TTS_STYLE = (
     "Narrate in a calm, clear, professional male voice with a warm, even tone "
     "and a steady pace, keeping exactly the same voice from start to finish"
