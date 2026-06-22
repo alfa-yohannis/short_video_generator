@@ -1,0 +1,36 @@
+# Preparation profile: TOGAF fact-checking (no artwork, no app, web only).
+#
+# Selected by a storyboard's `preparation_profile: togaf` front-matter, and used
+# only with `--run-preparation`. TOGAF is a METHODOLOGY with NO official icon set,
+# and its scenes are drawn from clean labelled geometry — so this profile gathers
+# no symbol images. Instead the agent verifies the topic's canonical structure
+# online and writes a `reference.md` of sourced facts, which the build folds into
+# the scene-generation context as authoritative. Needs no MCP server and launches
+# no app (WebSearch/WebFetch are in the base tool set), so it works headless.
+
+name: togaf
+assets_subdir: assets/togaf      # reference.md lands in <output>/assets/togaf/
+
+# Extra, topic-specific instructions injected into the preparation agent prompt.
+prompt_specialization: |
+  This is a TOGAF enterprise-architecture METHODOLOGY video. TOGAF has NO official
+  icon/symbol set, and every scene is drawn from clean labelled geometry — so do
+  NOT fetch, download, or invent any symbol/diagram images, and do NOT write a
+  manifest.json. Your deliverable is the FACTS one: a `reference.md` of verified,
+  sourced facts.
+
+  Verify this topic's canonical structure and terminology against authoritative
+  sources — prefer The Open Group TOGAF Standard (pubs.opengroup.org); otherwise a
+  reputable enterprise-architecture reference. Capture, in plain words a beginner
+  can follow (each with the source URL you confirmed it against):
+  - The exact phase/element names this topic uses and their correct order.
+  - Whenever the ADM cycle is involved, state the canonical layout EXPLICITLY:
+    the ring is Phases A through H ONLY; the Preliminary phase sits OUTSIDE the
+    ring with a single arrow feeding INTO Phase A (Architecture Vision); it is NOT
+    a box on the ring. Requirements Management is the central hub joined to every
+    phase. Phase H (Architecture Change Management) loops back to Phase A
+    (Architecture Vision) to close the cycle.
+  - Any other authoritative facts these specific scenes depend on (key inputs,
+    outputs, and one-line definitions of the terms they introduce).
+  Flag any common misconception explicitly (e.g. "a frequent error is drawing
+  Preliminary as the first box on the ring — it is not on the ring").

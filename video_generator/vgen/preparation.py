@@ -45,6 +45,12 @@ from .models import Storyboard
 from .progress import progress
 
 MANIFEST_NAME = "manifest.json"
+# Fact-checking deliverable for subjects that have NO artwork to fetch (e.g. the
+# TOGAF methodology pack): instead of symbol images + a manifest, the agent writes
+# its verified, sourced findings here as plain markdown. The runner folds this text
+# into the storyboard's preparation context so scene generation treats it as
+# authoritative (see :func:`load_reference_notes` and pipeline._run_preparation).
+NOTES_NAME = "reference.md"
 
 # Tools every profile allows without prompting: the file + web tools the agent
 # needs to save assets or fall back to an online source. Each profile may add
@@ -84,6 +90,20 @@ def load_manifest(assets_dir: Path) -> List[Dict[str, str]]:
         if isinstance(item, dict) and item.get("type") and item.get("file"):
             out.append({k: str(v) for k, v in item.items()})
     return out
+
+
+def load_reference_notes(assets_dir: Path) -> str:
+    """Return the text of ``<assets_dir>/reference.md``, or ``""`` if absent.
+
+    This is the *facts* counterpart to :func:`load_manifest`: a preparation run for
+    an artwork-less subject writes its verified findings here, and the build folds
+    them into the scene-generation context."""
+    notes = assets_dir / NOTES_NAME
+    try:
+        text = notes.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    return text
 
 
 def is_noop_preparation(preparation: str) -> bool:
@@ -422,9 +442,11 @@ class PreparationRunner:
             return None
 
         existing = load_manifest(assets_dir)
-        if existing and not force:
-            progress.log(f"  [prep] reusing {len(existing)} cached asset(s) in "
-                         f"{assets_dir} (pass --force to refetch).")
+        if (existing or load_reference_notes(assets_dir)) and not force:
+            cached = (f"{len(existing)} cached asset(s)" if existing
+                      else "cached reference notes")
+            progress.log(f"  [prep] reusing {cached} in {assets_dir} "
+                         "(pass --force to refetch).")
             return assets_dir
 
         assets_dir.mkdir(parents=True, exist_ok=True)
@@ -447,13 +469,19 @@ class PreparationRunner:
             return None
 
         assets = load_manifest(assets_dir)
-        if not assets:
-            progress.log("  [prep] preparation produced no usable assets "
-                         "(no manifest.json) — continuing with Manim primitives.")
+        notes = load_reference_notes(assets_dir)
+        if not assets and not notes:
+            progress.log("  [prep] preparation produced no usable output (no "
+                         "manifest.json and no reference.md) — continuing with "
+                         "Manim primitives.")
             return None
-        progress.log(f"  [prep] ✓ {len(assets)} asset(s) ready in {assets_dir}: "
-                     f"{', '.join(s['type'] for s in assets[:8])}"
-                     f"{'…' if len(assets) > 8 else ''}")
+        if assets:
+            progress.log(f"  [prep] ✓ {len(assets)} asset(s) ready in {assets_dir}: "
+                         f"{', '.join(s['type'] for s in assets[:8])}"
+                         f"{'…' if len(assets) > 8 else ''}")
+        if notes:
+            progress.log(f"  [prep] ✓ verified reference notes ({len(notes)} chars) "
+                         f"ready in {assets_dir / NOTES_NAME}.")
         return assets_dir
 
     def _allowed_tools(self, profile: PreparationProfile) -> List[str]:
@@ -473,9 +501,14 @@ class PreparationRunner:
                        for s in storyboard.scenes if s.description.strip()]
         scenes_block = "\n".join(scene_lines) if scene_lines else "(see the brief above)"
         return f"""You are the PREPARATION step for an automated tutorial-video build.
-Your job is to gather the real, authoritative reference ASSETS this video needs,
-save them as files, and write a manifest — then stop. You are NOT writing any
-video/scene code.
+Your job is to gather the real, authoritative reference material this video needs
+and save it — then stop. You are NOT writing any video/scene code. There are two
+kinds of deliverable; the instructions above tell you which this topic needs:
+  • ARTWORK — real symbol/diagram files + a manifest.json (for topics with an
+    official notation to load, e.g. ArchiMate symbols); or
+  • FACTS — a reference.md of verified, sourced facts (for topics drawn from plain
+    labelled geometry with no official artwork, e.g. the TOGAF methodology).
+Produce whichever the instructions call for (occasionally both); skip the other.
 
 PROJECT TITLE: {storyboard.title}
 
@@ -485,13 +518,25 @@ PROJECT BRIEF:
 THE STORYBOARD'S OWN PREPARATION INSTRUCTIONS (carry these out):
 {storyboard.preparation.strip()}
 {special_block}
-SCENES IN THIS VIDEO — fetch ONLY the symbols these scenes actually use; do NOT
-exhaustively gather every possible symbol. Read the descriptions and collect just
-the element/relationship types they name (including any from neighbouring layers):
+SCENES IN THIS VIDEO — gather ONLY what these scenes actually use; do NOT
+exhaustively collect everything. For ARTWORK, fetch just the element/relationship
+types the descriptions name (including any from neighbouring layers); for FACTS,
+verify only the structure and terms these scenes depend on:
 {scenes_block}
 
 OUTPUT CONTRACT (follow EXACTLY):
-- Save every asset into this directory: {assets_dir}
+- Save everything into this directory: {assets_dir}
+
+FACTS deliverable (when the instructions ask you to verify facts, not fetch artwork):
+- Do NOT fetch, draw, or invent any symbol images, and do NOT write a manifest.json.
+- Verify the topic's canonical structure and terminology against authoritative
+  sources (prefer the primary/official source online), then write your findings to
+  {assets_dir / NOTES_NAME} as plain markdown: short, concrete, beginner-readable
+  statements the scene author must follow, each with the source URL you confirmed it
+  against. This file is treated as authoritative context for every scene, so state
+  the facts plainly and flag any common misconception explicitly.
+
+ARTWORK deliverable (when the instructions ask you to fetch symbols/diagrams):
 - Prefer SVG. Name each file by a lowercase, hyphen-free slug of the thing it
   depicts, e.g. "stakeholder.svg". If you truly cannot get or make an SVG, save a
   PNG/JPG with the same stem instead (e.g. "stakeholder.jpg").
@@ -508,6 +553,7 @@ OUTPUT CONTRACT (follow EXACTLY):
   fine). Include one entry per asset you actually saved (omit ones you failed to
   obtain).
 
-Work until the files and manifest.json exist, then stop with a one-line summary of
-what you saved and where each came from.
+Work until the deliverable the instructions call for exists (manifest.json and/or
+reference.md), then stop with a one-line summary of what you saved and where each
+fact/asset came from.
 """

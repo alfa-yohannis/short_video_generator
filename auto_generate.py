@@ -179,19 +179,24 @@ def update_row(no: str, **fields: str) -> None:
 def _build_prompt(name: str, category: str, pack: SubjectPack) -> str:
     """Render the pack's storyboard prompt template for one topic.
 
-    The template uses ``{{NAME}}``, ``{{CATEGORY}}``, ``{{TITLE}}`` and
-    ``{{EXEMPLAR}}`` tokens (plain replacement, so literal braces in the prompt
-    are safe). ``title`` = slug + the pack's ``title_suffix``."""
+    The template uses ``{{NAME}}``, ``{{CATEGORY}}``, ``{{TITLE}}``, ``{{METHOD}}``
+    and ``{{EXEMPLAR}}`` tokens (plain replacement, so literal braces in the prompt
+    are safe). ``title`` = slug + the pack's ``title_suffix``. ``{{METHOD}}`` and
+    the injected exemplar come from the pack's per-topic teaching method (see
+    ``SubjectPack.storyboard_method``); single-method packs leave ``{{METHOD}}``
+    empty and inject their one exemplar."""
     slug = slugify(name)
     title = slug + pack.naming.get("title_suffix", "")
     spec = pack.storyboard_spec
     template = pack.read_text(spec.get("prompt_file", "storyboard_prompt.md"))
-    exemplar = pack.read_text(spec.get("exemplar_file", "exemplars/default.md")).strip()
+    method, exemplar_rel = pack.storyboard_method(category, name)
+    exemplar = pack.read_text(exemplar_rel).strip()
     if not template:
         raise SystemExit(f"subject '{pack.name}' has no storyboard prompt template.")
     return (template.replace("{{NAME}}", name)
                     .replace("{{CATEGORY}}", category)
                     .replace("{{TITLE}}", title)
+                    .replace("{{METHOD}}", method)
                     .replace("{{EXEMPLAR}}", exemplar))
 
 

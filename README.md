@@ -315,6 +315,16 @@ YAML files in the repo-root [`profiles/`](profiles/) directory — **drop a
   model is active the moment the server comes up, no GUI automation needed. Then it
   waits up to 60s for the port. Needs a graphical display — under headless/cron (no
   `DISPLAY`) start Archi yourself.
+- **`togaf`** ([`profiles/togaf.yaml`](profiles/togaf.yaml)) — **fact-checking, no
+  artwork.** TOGAF has no official symbol set, so this profile fetches no images;
+  instead the agent verifies the topic's canonical structure online (preferring The
+  Open Group's TOGAF Standard) and writes a `reference.md` of sourced facts under
+  `assets/togaf/`. The build folds that text into the scene-generation context as
+  authoritative — so, e.g., the ADM is drawn the canonical way (ring = Phases A–H,
+  Preliminary outside feeding Phase A, Phase H looping back to Phase A) rather than
+  from the model's memory. Launches no app and needs no MCP server, so it runs
+  headless. This is the **FACTS** deliverable (vs. `archi`'s **ARTWORK**); a profile
+  picks one via its `prompt_specialization`.
 
 ```markdown
 # My Topic
@@ -507,6 +517,8 @@ in its own console. Pick the subject explicitly, or route each row by category:
 ```bash
 # design-pattern queue (every row -> design_patterns pack)
 python auto_generate.py --subject design_patterns
+# TOGAF queue (every row -> togaf pack, uses togaf_todo.csv)
+python auto_generate.py --subject togaf
 # enterprise-architecture queue (rows routed to archimate/togaf by category)
 python auto_generate.py --csv enterprise_architecture_todo.csv
 # helper modes
@@ -515,8 +527,9 @@ python auto_generate.py --subject design_patterns --start 5
 python auto_generate.py --csv enterprise_architecture_todo.csv --reset-stuck
 ```
 
-`auto_generate_patterns.py` and `auto_generate_ea.py` remain as thin shims that
-forward to `auto_generate.py`, so existing cron entries keep working.
+`auto_generate_patterns.py` (design patterns), `auto_generate_togaf.py` (the TOGAF
+queue), and `auto_generate_ea.py` (the combined ArchiMate + TOGAF queue) remain as
+thin shims that forward to `auto_generate.py`, so existing cron entries keep working.
 
 ## Usage examples
 

@@ -231,20 +231,32 @@ def is_daily_quota(detail: str) -> bool:
 
 
 def request_gemini_audio(text: str, api_key: str, model: str, voice: str,
-                         timeout: float) -> Tuple[bytes, int]:
+                         timeout: float, *, style: Optional[str] = None,
+                         temperature: Optional[float] = None) -> Tuple[bytes, int]:
     """Call the Gemini TTS endpoint; return ``(pcm_s16le_bytes, sample_rate)``.
 
     Uses only the standard library (``urllib``) — no extra dependency. Raises
     :class:`GeminiQuotaError` on a daily-quota 429, ``RuntimeError`` otherwise.
+
+    Because each scene is a separate call, two knobs keep the voice from drifting
+    between scenes (e.g. the male Iapetus voice occasionally rendering higher /
+    feminine): a non-empty ``style`` is prepended as a natural-language delivery
+    instruction — applied to the performance, NOT read aloud — to pin one narrator
+    persona, and a ``temperature`` (kept low) makes each clip reproducible instead
+    of freshly sampled.
     """
-    body = {
-        "contents": [{"parts": [{"text": text}]}],
-        "generationConfig": {
-            "responseModalities": ["AUDIO"],
-            "speechConfig": {
-                "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice}}
-            },
+    prompt = f"{style.strip()}: {text}" if style and style.strip() else text
+    generation_config = {
+        "responseModalities": ["AUDIO"],
+        "speechConfig": {
+            "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice}}
         },
+    }
+    if temperature is not None:
+        generation_config["temperature"] = temperature
+    body = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": generation_config,
     }
     request = urllib.request.Request(
         config.GEMINI_TTS_ENDPOINT.format(model=model),
@@ -277,9 +289,17 @@ def request_gemini_audio(text: str, api_key: str, model: str, voice: str,
 
 
 def write_gemini_clip(text: str, mp3: Path, srt: Path, api_key: str, model: str,
-                      voice: str, timeout: float) -> None:
-    """Request audio, pipe the PCM through ffmpeg to MP3, and write an SRT."""
-    pcm, rate = request_gemini_audio(text, api_key, model, voice, timeout)
+                      voice: str, timeout: float, *, style: Optional[str] = None,
+                      temperature: Optional[float] = None) -> None:
+    """Request audio, pipe the PCM through ffmpeg to MP3, and write an SRT.
+
+    ``style``/``temperature`` are forwarded to :func:`request_gemini_audio` to keep
+    one voice across scenes. The SRT is always estimated from the ORIGINAL
+    narration ``text`` (never the style-prefixed prompt), so subtitle timing and
+    wording are unaffected.
+    """
+    pcm, rate = request_gemini_audio(text, api_key, model, voice, timeout,
+                                     style=style, temperature=temperature)
     if not pcm:
         raise RuntimeError("gemini produced 0-byte audio")
     tmp_mp3 = mp3.with_suffix(mp3.suffix + ".part")
@@ -306,11 +326,23 @@ class GeminiTtsEngine(TtsEngine):
     default_voice = config.DEFAULT_GEMINI_VOICE
 
     def __init__(self, model: str = config.DEFAULT_GEMINI_MODEL,
-                 retries: int = 2, wait: float = 5.0, timeout: float = 180.0) -> None:
+                 retries: int = 1, wait: float = 5.0, timeout: float = 180.0,
+                 style: Optional[str] = None,
+                 temperature: Optional[float] = None) -> None:
+        # retries: number of EXTRA attempts after the first. Default 1 (one retry)
+        # for standalone --tts gemini, which has no safety net. The gemini_id path
+        # passes retries=0 instead, so a failed clip drops to Edge immediately with
+        # no wait — there's nothing to gain retrying, since the first failure makes
+        # the whole language reproduce on Edge anyway (see create_tts_engine).
         self.model = model
         self.retries = retries
         self.wait = wait
         self.timeout = timeout
+        # Voice-consistency knobs, default from config. Pass style="" to disable
+        # the persona preamble, or a float to override the sampling temperature.
+        self.style = config.GEMINI_TTS_STYLE if style is None else style
+        self.temperature = (config.GEMINI_TTS_TEMPERATURE if temperature is None
+                            else temperature)
         self._api_key: Optional[str] = None
 
     def prepare(self, storyboard) -> None:
@@ -327,7 +359,8 @@ class GeminiTtsEngine(TtsEngine):
         for attempt in range(1, attempts + 1):
             try:
                 write_gemini_clip(text, mp3, srt, self._api_key, self.model,
-                                  voice, self.timeout)
+                                  voice, self.timeout, style=self.style,
+                                  temperature=self.temperature)
                 return
             except GeminiQuotaError as exc:
                 # A per-day quota won't recover in seconds — stop now with
@@ -357,15 +390,21 @@ class GeminiTtsEngine(TtsEngine):
 # =====================================================================
 
 class FallbackTtsEngine(TtsEngine):
-    """Routes chosen languages to a *primary* engine, regenerating the clip from
-    scratch with a *secondary* engine if the primary fails for any reason
-    (out of credit, rate limit, bad connection, missing key, …). Languages not
-    listed in ``primary_langs`` go straight to the secondary.
+    """Routes chosen languages to a *primary* engine, dropping to a *secondary*
+    engine if the primary fails for any reason (out of credit, rate limit, bad
+    connection, missing key, …). Languages not listed in ``primary_langs`` go
+    straight to the secondary.
 
     Built for the bilingual case "voice Indonesian with Gemini (Iapetus) but keep
     the free Edge Indonesian voice as the safety net, while English stays on
     Edge": ``primary=GeminiTtsEngine``, ``fallback=EdgeTtsEngine``,
     ``primary_langs=("id",)``.
+
+    **All-or-nothing per language, for a consistent voice.** A routed language is
+    voiced entirely by the primary, but if ANY one of its clips fails, the WHOLE
+    language is reproduced on the secondary — never a single video that is half
+    Gemini-Iapetus and half Edge-Ardi. The primary fails fast (retries=0, no wait),
+    since the first failure abandons it for that language anyway.
 
     Voices are resolved per side so an Edge voice in the storyboard never leaks
     into the Gemini request (or vice-versa): a routed language uses
@@ -414,27 +453,67 @@ class FallbackTtsEngine(TtsEngine):
     def _fallback_voice(self, storyboard, lang: str) -> str:
         return self.fallback_voices.get(lang) or self.fallback.voice_for(storyboard, lang)
 
-    def synthesize_scene(self, storyboard, lang: str, basename: str, text: str,
-                         mp3: Path, srt: Path) -> None:
-        routed = lang in self.primary_langs
-        if routed and self.primary_ready:
-            voice = self._primary_voice(storyboard, lang)
-            progress.log(f"  {self.primary.name} {voice} -> {lang}/{basename}…")
+    def synthesize_storyboard(self, storyboard, output: Path, force: bool) -> None:
+        """Voice each language as a whole, all-or-nothing for routed languages.
+
+        A routed language (e.g. ``id``) is voiced entirely by the primary; if ANY
+        clip fails, the WHOLE language is reproduced on the secondary so the video
+        keeps ONE voice throughout. Non-routed languages go straight to the
+        secondary. (Overrides the per-clip base loop to make the failure decision
+        per language, not per clip.)
+        """
+        self.prepare(storyboard)
+        for lang in storyboard.languages:
+            audio_dir = output / "audio" / lang
+            audio_dir.mkdir(parents=True, exist_ok=True)
+            is_primary_lang = lang in self.primary_langs
+            if is_primary_lang and self.primary_ready:
+                ok = self._voice_language(self.primary, self._primary_voice(storyboard, lang),
+                                          storyboard, lang, audio_dir, force, stop_on_error=True)
+                if ok:
+                    continue
+                progress.log(f"  ⚠ {self.primary.name} failed for a {lang} clip — reproducing "
+                             f"ALL {lang} audio with {self.fallback.name} for one consistent voice…")
+                # force=True: overwrite any clips the primary already voiced, so the
+                # whole language is the same engine/voice (not a Gemini/Edge mix).
+                self._voice_language(self.fallback, self._fallback_voice(storyboard, lang),
+                                     storyboard, lang, audio_dir, force=True, stop_on_error=False)
+            elif is_primary_lang:                    # primary unavailable (e.g. no key)
+                self._voice_language(self.fallback, self._fallback_voice(storyboard, lang),
+                                     storyboard, lang, audio_dir, force, stop_on_error=False)
+            else:                                    # non-routed language → secondary
+                self._voice_language(self.fallback, self.fallback.voice_for(storyboard, lang),
+                                     storyboard, lang, audio_dir, force, stop_on_error=False)
+
+    def _voice_language(self, engine: TtsEngine, voice: str, storyboard, lang: str,
+                        audio_dir: Path, force: bool, *, stop_on_error: bool) -> bool:
+        """Voice every scene of one language with ``engine`` at ``voice``.
+
+        Skips clips already present (unless ``force``). With ``stop_on_error`` it
+        returns ``False`` the moment a clip fails (so the caller can reproduce the
+        whole language elsewhere); otherwise a failure propagates — the secondary is
+        the safety net and must succeed. Returns ``True`` when the language is done.
+        """
+        for scene in storyboard.scenes:
+            mp3 = audio_dir / f"{scene.basename}.mp3"
+            srt = audio_dir / f"{scene.basename}.srt"
+            if valid_audio(mp3) and srt.exists() and not force:
+                continue
+            progress.log(f"  {engine.name} {voice} -> {lang}/{scene.basename}…")
+            started = time.monotonic()
             try:
-                self.primary.synthesize_one(text, voice, mp3, srt)
-                return
-            except (Exception, SystemExit) as exc:  # noqa: BLE001 — any failure -> fall back
-                # Drop any partial output so the clip is reproduced from scratch.
-                mp3.unlink(missing_ok=True)
+                engine.synthesize_one(scene.narration[lang], voice, mp3, srt)
+            except (Exception, SystemExit) as exc:   # noqa: BLE001
+                mp3.unlink(missing_ok=True)          # drop partial output
                 srt.unlink(missing_ok=True)
-                progress.log(f"    ⚠ {self.primary.name} failed for {lang}/{basename} "
-                             f"({_brief(exc)}); reproducing with {self.fallback.name}…")
-        # Fallback path: a routed language keeps its configured Edge voice; any
-        # other language uses the secondary engine's own (storyboard/CLI) voice.
-        voice = self._fallback_voice(storyboard, lang) if routed \
-            else self.fallback.voice_for(storyboard, lang)
-        progress.log(f"  {self.fallback.name} {voice} -> {lang}/{basename}…")
-        self.fallback.synthesize_one(text, voice, mp3, srt)
+                if not stop_on_error:
+                    raise
+                progress.log(f"    ⚠ {engine.name} failed for {lang}/{scene.basename} "
+                             f"({_brief(exc)}).")
+                return False
+            progress.log(f"    ↳ {lang}/{scene.basename}.mp3 in "
+                         f"{time.monotonic() - started:.1f}s")
+        return True
 
     def synthesize_one(self, text: str, voice: str, mp3: Path, srt: Path) -> None:
         # Not used by the loop (synthesize_scene routes per language), but the
@@ -469,7 +548,9 @@ def create_tts_engine(storyboard) -> TtsEngine:
         return GeminiTtsEngine(model=storyboard.gemini_model)
     if provider in GEMINI_ID_ALIASES:
         return FallbackTtsEngine(
-            primary=GeminiTtsEngine(model=storyboard.gemini_model),
+            # retries=0: fail fast to Edge with no wait — the first failure
+            # reproduces the whole id track on Edge anyway, so retrying is wasted.
+            primary=GeminiTtsEngine(model=storyboard.gemini_model, retries=0),
             fallback=EdgeTtsEngine(),
             primary_langs=("id",),
             primary_voices={"id": config.DEFAULT_GEMINI_VOICE},      # Iapetus

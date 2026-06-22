@@ -28,7 +28,7 @@ from .dependencies import DependencyChecker
 from .duration import DurationFitter
 from .models import Storyboard
 from .narration import NarrationWriter
-from .preparation import PreparationRunner, is_noop_preparation
+from .preparation import PreparationRunner, is_noop_preparation, load_reference_notes
 from .progress import progress
 from .refine import StoryboardRefiner
 from .renderer import ManimRenderer, SceneValidator
@@ -293,6 +293,16 @@ def _run_preparation(storyboard: Storyboard, output: Path, options: BuildOptions
     fetched = runner.run(storyboard, output, options.force)
     if fetched is not None:                       # keep any front-matter assets_dir
         storyboard.prep_assets_dir = fetched      # as a fallback when prep yields nothing
+        # Fold any verified FACTS the agent gathered (reference.md) into the
+        # preparation context, so the existing scene-prompt injection (which already
+        # feeds storyboard.preparation to every scene) treats them as authoritative.
+        notes = load_reference_notes(fetched)
+        if notes and notes not in storyboard.preparation:
+            storyboard.preparation = (
+                f"{storyboard.preparation.rstrip()}\n\n"
+                "VERIFIED REFERENCE (gathered and source-checked online during "
+                f"preparation — authoritative):\n{notes}"
+            ).strip()
 
 
 def _run_with_splits(storyboard: Storyboard, output: Path, options: BuildOptions) -> None:

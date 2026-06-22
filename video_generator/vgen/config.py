@@ -63,6 +63,28 @@ DEFAULT_EDGE_VOICES = {
 DEFAULT_GEMINI_VOICE = "Iapetus"                 # multilingual — one voice covers both
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash-preview-tts"
 
+# Gemini TTS voice-consistency knobs. Each scene is voiced by a SEPARATE Gemini
+# call, so by default the model freshly samples every clip and the voice can
+# drift between scenes — most visibly the male Iapetus voice occasionally coming
+# out higher/feminine. A style preamble pins ONE narrator persona: it is prepended
+# to the narration as a natural-language delivery instruction (applied to the
+# performance, not read aloud). Set it to "" to disable, or edit the persona/pace.
+#
+# Temperature: the format/placement (generationConfig.temperature, a number) is
+# fine, but gemini-2.5-flash-preview-tts only tolerates the UPPER part of the
+# 0.0–2.0 range. Empirically (id narration, Iapetus) the cliff is sharp and sits
+# between 0.55 and 0.60: values ≤ 0.55 hang / return `finishReason: OTHER` with NO
+# audio — so every clip exhausts its retries and falls back to Edge (the old 0.1
+# caused exactly that "Gemini doesn't work"). 0.60 works (tested 3/3) and up.
+# 0.60 is the lowest usable value — best voice consistency — but sits right at the
+# edge, so the engine's retries + the gemini_id Edge fallback are the backstop for
+# a rare miss; raise toward 1.0 for more margin. Do NOT go ≤ 0.55.
+GEMINI_TTS_TEMPERATURE = 0.6
+GEMINI_TTS_STYLE = (
+    "Narrate in a calm, clear, professional male voice with a warm, even tone "
+    "and a steady pace, keeping exactly the same voice from start to finish"
+)
+
 # Friendly `voice: male|female` aliases for the simplified storyboard format,
 # resolved per language for the Edge engine. Gemini voices aren't gendered here,
 # so `voice: male|female` with gemini falls back to the Gemini default.

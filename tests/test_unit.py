@@ -26,12 +26,14 @@ from vgen.narration import NarrationWriter
 from vgen import density
 from vgen.density import SceneTooDenseError, is_too_dense, min_fit_scale, overflow_count
 from vgen.pipeline import (
-    BuildOptions, apply_cli_overrides, _filtered, _guard_split, _run_with_splits, _scenes_changed,
+    BuildOptions, apply_cli_overrides, _filtered, _guard_split, _run_preparation,
+    _run_with_splits, _scenes_changed,
 )
 from vgen import preparation as prep_mod
 from vgen.preparation import (
     DeclarativeProfile, PreparationProfile, PreparationRunner, get_profile,
-    is_noop_preparation, load_manifest, mcp_host_port, port_open,
+    is_noop_preparation, load_manifest, load_reference_notes, mcp_host_port,
+    port_open,
 )
 from vgen.refine import StoryboardRefiner
 from vgen.scenes import SceneSynthesizer, resolve_template_dir
@@ -564,6 +566,30 @@ def test_fallback_reproduces_id_on_primary_error(tmp_path):
     assert (tmp_path / "audio" / "id" / "01_x.mp3").read_bytes() == b"x"   # Edge output landed
 
 
+def test_fallback_one_clip_failure_reproduces_whole_language_on_edge(tmp_path):
+    """If the primary fails on ANY id clip, every id clip (including ones it had
+    already voiced) is reproduced on Edge, so the language keeps one voice."""
+    class _FailOnSecond(_RecordingTts):
+        def synthesize_one(self, text, voice, mp3, srt):
+            self.calls.append((text, voice))
+            if len(self.calls) == 2:                 # second id clip blows up
+                raise RuntimeError("gemini boom")
+            mp3.write_bytes(b"g"); srt.write_text("1\n", encoding="utf-8")
+
+    primary, fallback = _FailOnSecond("gemini"), _RecordingTts("edge")
+    sb = make_storyboard(
+        languages=["id"], orientations=["landscape"], voices={},
+        scenes=[Scene("01_a", "A", "a.py", 10, "d", {"id": "Satu."}),
+                Scene("02_b", "B", "b.py", 10, "d", {"id": "Dua."})])
+    _make_fallback(primary, fallback).synthesize_storyboard(sb, tmp_path, force=False)
+
+    # Both id clips end up Edge-voiced (id-ID-ArdiNeural) — none left on Gemini.
+    assert ("Satu.", "id-ID-ArdiNeural") in fallback.calls
+    assert ("Dua.", "id-ID-ArdiNeural") in fallback.calls
+    assert (tmp_path / "audio" / "id" / "01_a.mp3").read_bytes() == b"x"  # Edge overwrote Gemini
+    assert (tmp_path / "audio" / "id" / "02_b.mp3").read_bytes() == b"x"
+
+
 def test_fallback_when_primary_unavailable_uses_fallback_for_all(tmp_path):
     primary, fallback = _RecordingTts("gemini", prepare_fail=True), _RecordingTts("edge")
     eng = _make_fallback(primary, fallback)
@@ -738,6 +764,53 @@ def test_request_gemini_audio_parses(monkeypatch):
                         lambda req, timeout=None: _FakeResp(json.dumps(payload).encode()))
     out_pcm, rate = request_gemini_audio("hi", "key", "model", "Iapetus", 30.0)
     assert out_pcm == pcm and rate == 24000
+
+
+def _capture_gemini_body(monkeypatch):
+    """Point urlopen at a fake that records the POSTed JSON body and returns audio."""
+    import base64
+    captured = {}
+    payload = {"candidates": [{"content": {"parts": [
+        {"inlineData": {"mimeType": "audio/L16;codec=pcm;rate=24000",
+                        "data": base64.b64encode(b"\x01\x02").decode()}}]}}]}
+
+    def fake_urlopen(req, timeout=None):
+        captured["body"] = json.loads(req.data.decode("utf-8"))
+        return _FakeResp(json.dumps(payload).encode())
+
+    monkeypatch.setattr(tts_mod.urllib.request, "urlopen", fake_urlopen)
+    return captured
+
+
+def test_request_gemini_audio_applies_style_and_temperature(monkeypatch):
+    """style is prepended as a delivery instruction and temperature pins sampling
+    — together they keep one voice across the per-scene calls. The prebuilt voice
+    stays pinned and the original narration is preserved after the prefix."""
+    captured = _capture_gemini_body(monkeypatch)
+    request_gemini_audio("Halo dunia.", "key", "model", "Iapetus", 30.0,
+                         style="Narrate calmly", temperature=0.1)
+    cfg = captured["body"]["generationConfig"]
+    assert cfg["temperature"] == 0.1
+    assert cfg["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Iapetus"
+    assert captured["body"]["contents"][0]["parts"][0]["text"] == "Narrate calmly: Halo dunia."
+
+
+def test_request_gemini_audio_defaults_stay_minimal(monkeypatch):
+    """With no style/temperature (the plain `gemini` path), the body is unchanged:
+    no temperature key and the text is the bare narration."""
+    captured = _capture_gemini_body(monkeypatch)
+    request_gemini_audio("Hello.", "key", "model", "Iapetus", 30.0)
+    assert "temperature" not in captured["body"]["generationConfig"]
+    assert captured["body"]["contents"][0]["parts"][0]["text"] == "Hello."
+
+
+def test_gemini_engine_defaults_consistency_knobs_from_config():
+    """The engine picks up the config knobs by default, and an explicit style=""
+    disables the preamble (escape hatch)."""
+    eng = GeminiTtsEngine()
+    assert eng.style == config.GEMINI_TTS_STYLE
+    assert eng.temperature == config.GEMINI_TTS_TEMPERATURE
+    assert GeminiTtsEngine(style="", temperature=0.0).style == ""
 
 
 def test_request_gemini_audio_http_error_becomes_runtimeerror(monkeypatch):
@@ -1688,6 +1761,64 @@ def test_preparation_run_survives_agent_failure(tmp_path):
     assert out is None                                 # SystemExit caught -> None
 
 
+# --- preparation: the FACTS channel (reference.md, no artwork) --------------
+
+
+def _write_reference_notes(assets_dir: Path) -> None:
+    """A facts-only prep agent: writes reference.md and NO manifest/symbols."""
+    (assets_dir / "reference.md").write_text(
+        "The ADM ring is Phases A-H only; Preliminary feeds Phase A.\n"
+        "Source: https://pubs.opengroup.org/togaf-standard/\n", encoding="utf-8")
+
+
+def test_load_reference_notes_reads_and_missing(tmp_path):
+    assert load_reference_notes(tmp_path) == ""        # absent -> ""
+    _write_reference_notes(tmp_path)
+    assert "Phases A-H only" in load_reference_notes(tmp_path)
+
+
+def test_preparation_run_facts_only_surfaces_notes(tmp_path):
+    # An artwork-less topic produces only reference.md (no manifest); run() must
+    # still treat that as usable and return the assets dir.
+    agent = _FakePrepAgent(writer=_write_reference_notes)
+    out = PreparationRunner(agent, _mcp(tmp_path)).run(
+        _sb("Verify the canonical structure.", "togaf"), tmp_path, force=True)
+    assert out == (tmp_path / "assets" / "togaf").resolve()   # profiles/togaf.yaml
+    assert load_manifest(out) == []                    # no artwork
+    assert "Phases A-H only" in load_reference_notes(out)
+
+
+def test_preparation_run_reuses_cached_notes_without_force(tmp_path):
+    assets = (tmp_path / "assets" / "togaf").resolve()
+    assets.mkdir(parents=True)
+    _write_reference_notes(assets)
+    agent = _FakePrepAgent(writer=_write_reference_notes)
+    out = PreparationRunner(agent, _mcp(tmp_path)).run(
+        _sb("Verify.", "togaf"), tmp_path, force=False)
+    assert out == assets and agent.calls == 0          # notes cache reused
+
+
+def test_build_prompt_describes_facts_deliverable(tmp_path):
+    runner = PreparationRunner(_FakePrepAgent(), _mcp(tmp_path))
+    prompt = runner._build_prompt(_sb("Verify facts."), tmp_path / "a", PreparationProfile())
+    assert "reference.md" in prompt and "FACTS" in prompt
+
+
+def test_run_preparation_folds_notes_into_context(tmp_path, monkeypatch):
+    # The build wires reference.md back into storyboard.preparation, so the existing
+    # scene-prompt injection carries the verified facts as authoritative context.
+    import vgen.pipeline as pl
+    sb = make_storyboard(preparation="Verify the canonical structure.",
+                         preparation_profile="togaf")
+    monkeypatch.setattr(pl, "create_ai_client",
+                        lambda name, effort=None: _FakePrepAgent(writer=_write_reference_notes))
+    options = BuildOptions(storyboard="x.md", output=str(tmp_path), only=None,
+                           run_preparation=True, mcp_config=_mcp(tmp_path), force=True)
+    _run_preparation(sb, tmp_path, options)
+    assert "VERIFIED REFERENCE" in sb.preparation
+    assert "Phases A-H only" in sb.preparation
+
+
 def test_agent_command_enables_mcp_and_tools():
     from vgen.ai_client import ClaudeClient
     cmd = ClaudeClient(effort="low")._agent_command(
@@ -1828,7 +1959,7 @@ def test_build_prompt_lists_scenes_for_scoping(tmp_path):
         preparation="Fetch symbols.",
         scenes=[Scene("01_sources", "S", "s.py", 20, "Introduce Stakeholder and Driver.", {})])
     prompt = runner._build_prompt(sb, tmp_path / "a", PreparationProfile())
-    assert "ONLY the symbols these scenes" in prompt
+    assert "ONLY what these scenes actually use" in prompt
     assert "01_sources: Introduce Stakeholder and Driver." in prompt
 
 

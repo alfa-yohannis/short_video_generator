@@ -1,26 +1,102 @@
 name: togaf
-display_name: TOGAF ADM
-aliases: [togaf, adm]
+display_name: TOGAF Enterprise Architecture
+# Bulk-driver SUBJECT routing (resolve_for_category): a CSV row whose category/name
+# contains any of these picks this pack. NOTE: the togaf queue is normally run with
+# `auto_generate.py --subject togaf` (which bypasses subject routing), so these
+# matter only for the mixed enterprise_architecture_todo.csv. Kept distinctive
+# ("togaf", "adm") so the longest-match rule doesn't collide with archimate's "archi".
+aliases: [togaf, adm, architecture development method, architecture content framework,
+          enterprise continuum, architecture capability framework, reference model]
 
 # --- scene generation -------------------------------------------------------
-# TOGAF is a METHOD taught as process flows (ADM cycle, inputs -> activities ->
-# deliverables), not a notation with reference symbols. No subject scene helpers
-# yet — a future helpers/togaf_flow.py (phase wheel, flow arrows) can be added
-# here and to scene_helpers without touching vgen/. No reference assets.
+# TOGAF is a METHODOLOGY/FRAMEWORK, not a modeling notation (no official icon set
+# to load, unlike archimate) and not source code (unlike design_patterns). Its
+# topics are taught with DIFFERENT visual methods depending on what they are — a
+# process cycle, a technique's matrix, a concept definition, a structuring
+# taxonomy, or a governance process — all built from generic _common.py shapes, so
+# no subject-specific scene helpers are needed. (The per-topic method is chosen by
+# `storyboard.methods` below; this guidance lists every visual the methods use.)
 scene_helpers: []
-scene_guidance: ""
+scene_guidance: |
+  RENDERING — TOGAF is a METHODOLOGY/FRAMEWORK, NOT a modeling notation and NOT
+  source code. Build every scene from clean labelled geometry using the generic
+  `_common` shapes (RoundedRectangle, Circle, Arc, the arrow helpers, Text/
+  MarkupText) so the result is identical at EVERY --effort level. Different TOGAF
+  topics call for different visual methods — render whichever the scene describes:
+  - ADM CYCLE (process / phase topics): Phases A–H as labelled rounded boxes
+    arranged clockwise on a RING, joined by curved arrows, with Requirements
+    Management as the central hub joined to every phase. The Preliminary phase is
+    NOT on the ring — draw it as a separate box OUTSIDE the ring with one arrow
+    feeding INTO Phase A (Architecture Vision); it is the one-time setup before the
+    cycle begins. Close the ring with an arrow from Phase H (Architecture Change
+    Management) back to Phase A (Architecture Vision) — a change triggers a new lap
+    starting at the Vision. Keep the SAME phase names and clockwise order every time
+    the ADM appears.
+  - MATRIX / GRID (techniques — Gap Analysis, Risk, Stakeholder mapping): a simple
+    labelled grid with row/column headers and cells, never code. Mark a gap or a
+    high risk cell in DANGER and a satisfied / carried-forward cell in OK.
+  - LAYERED BANDS (architecture domains, reference models): stacked labelled bands
+    — Business, Data, Application, Technology — reuse ONE consistent color per
+    domain / layer across all scenes.
+  - SPECTRUM / TAXONOMY (Enterprise Continuum, classification): labelled bands
+    along an axis that progresses generic -> specific, with example assets placed
+    on it.
+  - RELATIONSHIP MAP (concepts, the content metamodel): labelled boxes joined by
+    ACCENT arrows that read as "has / addresses / governs / produces".
+  - GOVERNANCE PROCESS (capability / governance topics): a small cycle, or a
+    central board with its controls around it, plus a scale or ladder for a
+    compliance level or a maturity level.
+  Semantic theme colors throughout: PRIMARY titles, ACCENT labels / relationships,
+  HIGHLIGHT the item in focus, OK a finished / coherent result, DANGER a gap or
+  problem. NEVER invent an "official TOGAF icon" — TOGAF has no standard icon set;
+  represent every concept with clean labelled geometry, not glyphs.
+
+# TOGAF has no reference symbol set to fetch or stage.
 asset_source:
   type: none
 
 # --- bulk driver (auto_generate.py) -----------------------------------------
-# Shares the enterprise-architecture queue with the archimate pack; the driver
-# routes each CSV row to archimate or togaf by category (see aliases).
-csv: enterprise_architecture_todo.csv
+csv: togaf_todo.csv
 naming:
-  title_suffix: ""
+  title_suffix: ""               # front-matter title = slug (no suffix)
   storyboard_suffix: _storyboard.md
 storyboard:
   prompt_file: storyboard_prompt.md
-  exemplar_file: exemplars/default.md
-cli_flags: [--tts, edge, --ai-cli, claude, --effort, xhigh,
-            --refine-storyboard, --validate-scenes, --force]
+  # Per-topic TEACHING METHOD (SubjectPack.storyboard_method): each row's
+  # "<category> <name>" picks the FIRST method below whose `match:` fragment it
+  # contains, and that method's `exemplar:` is injected as the prompt's worked
+  # example (its `name:` fills the prompt's {{METHOD}} token). This is what makes
+  # different TOGAF topic families get taught in different ways. Order matters —
+  # phases before techniques, structure before governance — see the comments.
+  # Falls back to default_method + exemplar_file when nothing matches.
+  exemplar_file: exemplars/concept.md       # fallback example
+  default_method: concept                   # fallback method label
+  methods:
+    # Phases first: "Phase F Migration Planning" must be adm_cycle, not technique.
+    - name: adm_cycle
+      match: [adm phases, adm overview, requirements management, preliminary phase]
+      exemplar: exemplars/adm_cycle.md
+    - name: technique
+      match: [guidelines and techniques, gap analysis, risk management,
+              stakeholder management, business scenario, capability-based planning,
+              migration planning techniques, applying iteration, partitioning,
+              interoperability]
+      exemplar: exemplars/technique.md
+    - name: concept
+      match: [togaf fundamentals, what is enterprise architecture, building block,
+              viewpoint, concerns and views, architecture domains,
+              togaf introduction, enterprise vs solution]
+      exemplar: exemplars/concept.md
+    # Structure before governance: "Governance Log" lives in the repository, so its
+    # "...continuum and repository" category must win over the "governance" word.
+    - name: structure
+      match: [content framework, enterprise continuum, continuum, repository,
+              reference model, deliverable, artifact, landscape,
+              standards information base, reference library]
+      exemplar: exemplars/structure.md
+    - name: governance
+      match: [capability framework, governance, architecture board, compliance,
+              skills framework, maturity]
+      exemplar: exemplars/governance.md
+cli_flags: [--tts, gemini_id, --ai-cli, claude, --effort, xhigh,
+            --run-preparation, --refine-storyboard, --validate-scenes, --force]

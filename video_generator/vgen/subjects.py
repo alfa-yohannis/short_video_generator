@@ -79,6 +79,16 @@ class SubjectPack:
         path = (self.root / rel) if self.root else None
         return path.read_text(encoding="utf-8") if path and path.exists() else ""
 
+    def storyboard_method(self, category: str = "", name: str = "") -> Tuple[str, str]:
+        """Return ``(method_name, exemplar_rel_path)`` for one topic.
+
+        The base/default pack teaches every topic the same way: no method name and
+        the single ``storyboard.exemplar_file``. :class:`DeclarativeSubjectPack`
+        overrides this when a pack declares ``storyboard.methods`` — so different
+        topic families (a process cycle vs. a technique's matrix vs. a concept) can
+        be taught with different methods and matching exemplars."""
+        return "", self.storyboard_spec.get("exemplar_file", "exemplars/default.md")
+
 
 class DeclarativeSubjectPack(SubjectPack):
     """A subject pack built from a ``subjects/<name>/subject.yaml`` spec."""
@@ -95,6 +105,30 @@ class DeclarativeSubjectPack(SubjectPack):
         self.csv = str(spec.get("csv") or "")
         self.cli_flags = list(spec.get("cli_flags") or [])
         self.storyboard_spec = dict(spec.get("storyboard") or {})
+
+    def storyboard_method(self, category: str = "", name: str = "") -> Tuple[str, str]:
+        """Resolve this pack's per-topic teaching method from a CSV row.
+
+        Each entry in ``storyboard.methods`` has a ``name``, an ``exemplar`` path,
+        and a list of ``match`` fragments; the FIRST method (top to bottom) whose
+        fragment is a substring of ``"<category> <name>"`` wins, and its exemplar
+        is the worked example injected into the storyboard prompt. With no
+        ``methods`` declared, or no fragment matching, falls back to
+        ``default_method`` + ``exemplar_file`` (so single-method packs are
+        unchanged)."""
+        spec = self.storyboard_spec
+        default_exemplar = spec.get("exemplar_file", "exemplars/default.md")
+        methods = spec.get("methods") or []
+        if not methods:
+            return "", default_exemplar
+        text = f"{category} {name}".lower()
+        for m in methods:
+            for frag in (m.get("match") or []):
+                frag = str(frag).strip().lower()
+                if frag and frag in text:
+                    return (str(m.get("name") or "").strip(),
+                            str(m.get("exemplar") or default_exemplar))
+        return str(spec.get("default_method") or "").strip(), default_exemplar
 
 
 def _load_pack_spec(name: str) -> Optional[Tuple[dict, Path]]:
@@ -143,10 +177,17 @@ def resolve_for_category(category: str, name: str = "") -> Optional[DeclarativeS
     """Pick the pack whose name/aliases appear in a CSV ``category``/topic.
 
     Replaces the bulk driver's hardcoded keyword routing (``_is_togaf_topic``):
-    a new subject becomes a data addition (its ``aliases``), not an ``if`` branch."""
+    a new subject becomes a data addition (its ``aliases``), not an ``if`` branch.
+
+    The MOST SPECIFIC (longest) matching alias wins, not merely the first subject
+    on disk — so a short, broad alias (archimate's ``archi``, a substring of
+    "architecture") cannot hijack a row that a longer alias claims precisely
+    (togaf's ``architecture content framework``). Ties keep the earlier subject."""
     text = f"{category} {name}".lower()
+    best: Optional[DeclarativeSubjectPack] = None
+    best_len = 0
     for pack in all_subjects():
         for key in (pack.name, *pack.aliases):
-            if key and key in text:
-                return pack
-    return None
+            if key and key in text and len(key) > best_len:
+                best, best_len = pack, len(key)
+    return best
