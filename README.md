@@ -675,8 +675,10 @@ sync with it):
 | 3 | **CONTAINMENT** | text/code spills outside its own panel/box | — | ✅ shrink content to its panel |
 | 4 | **OVERLAP** | two text mobjects **or** two content blocks (card/panel/callout) overlap by more than half the smaller one's area (ancestor/descendant pairs ignored) | ✅ | ❌ fixed via `strict` + AI repair |
 | 5 | **INTRUDE** | text resting over a *filled panel it isn't part of* (e.g. a note line on a card's bottom padding) — caught even when no glyphs collide and the overlap is well under half a block | ✅ | ❌ fixed via `strict` + AI repair |
+| 6 | **CROSS** | an arrow whose **body** (its middle, excluding the endpoint approaches) lies inside a filled box it doesn't connect to — an arrow drawn over a shape, or an arrowhead buried inside a box instead of stopping at its border. Plain lines/spokes are excluded (often drawn behind boxes on purpose) | ✅ | ❌ fixed via `strict` + AI repair |
+| 7 | **OCCLUDE** | an *opaque* shape drawn **on top of** text that isn't its own, hiding the label behind it (e.g. an emphasis overlay covering a box's name). The mirror of INTRUDE: INTRUDE is text over a foreign panel, OCCLUDE is a panel over text underneath it | ✅ | ❌ fixed via `strict` + AI repair |
 
-Not auto-checked: **semantic** problems such as an arrow pointing the wrong
+Not auto-checked: other **semantic** problems such as an arrow pointing the wrong
 direction. Geometry can't know the intended direction, so those are fixed at
 authoring / AI-generation time (the scene prompt steers toward auto-orienting
 arrows), or via the `strict` + AI re-repair loop, which regenerates the scene.

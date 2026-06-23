@@ -10,7 +10,14 @@
       "WebFetch(domain:conexiam.com)",
       "Bash(.venv/bin/python -c ' *)",
       "Bash(chmod +x auto_generate_togaf.py)",
-      "Bash(.venv/bin/python auto_generate_togaf.py --status)"
+      "Bash(.venv/bin/python auto_generate_togaf.py --status)",
+      "Bash(cd /home/alfa/projects/short_video_generator/tmp/phase_h_architecture_change_management)",
+      "Bash(ls scenes_landscape/)",
+      "Bash(ls scenes_portrait/)",
+      "Bash(ls scripts/)",
+      "Bash(ls -la final/)",
+      "Bash(.venv/bin/python -m py_compile video_generator/templates/default/_core.py)",
+      "Bash(.venv/bin/python -c \"import yaml; yaml.safe_load\\(open\\('subjects/togaf/subject.yaml'\\)\\); print\\('OK subject.yaml'\\)\")"
     ]
   }
 }

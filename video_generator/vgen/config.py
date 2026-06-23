@@ -117,6 +117,13 @@ GEMINI_TTS_ENDPOINT = (
 DEFAULT_DURATION_FLOOR_SECONDS = 120.0
 DEFAULT_DURATION_CAP_SECONDS = 180.0
 
+# A short hold at the END of every scene's muxed clip — the last frame is frozen
+# for this many seconds (with matching silence) so viewers get a beat to digest the
+# scene before the next one starts. Applied in ClipAssembler.mux (no Manim re-render
+# needed). Set to 0 to disable. The merged SRT offsets follow the clip length, so
+# subtitles stay aligned and no cue runs over the silent tail.
+SCENE_TAIL_PAD_SECONDS = 1.0
+
 # --- Narration timing ------------------------------------------------------
 # Words-per-second used to *estimate* spoken time from a script before any
 # audio is produced. The real Edge/Gemini rate is ~2.0-2.2, so 2.0 errs

@@ -113,9 +113,13 @@ def test_mux_and_concat_pipeline(tmp_path):
     clip_dir = tmp_path / "clips" / lang / orient
     assert (clip_dir / "01_a.mp4").exists() and (clip_dir / "02_b.mp4").exists()
 
+    # Each scene gets a SCENE_TAIL_PAD_SECONDS digest hold on its muxed clip.
+    pad = config.SCENE_TAIL_PAD_SECONDS
+    assert media.ffprobe_duration(clip_dir / "01_a.mp4") == pytest.approx(1.0 + pad, abs=0.4)
+
     final = assembler.concat(sb, tmp_path, lang, orient)
     assert final.exists() and final.name == "demo_landscape_id.mp4"
-    assert media.ffprobe_duration(final) == pytest.approx(2.0, abs=0.4)
+    assert media.ffprobe_duration(final) == pytest.approx(2.0 + 2 * pad, abs=0.4)
 
 
 @requires("ffmpeg")

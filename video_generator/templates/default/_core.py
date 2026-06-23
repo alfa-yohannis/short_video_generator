@@ -128,8 +128,14 @@ MarkupText.__init__ = _patched_markup_init
 #   5. INTRUDE     text resting over a filled panel it isn't part of (e.g. a
 #                  note line on a card's bottom padding)
 #                    detect: yes   auto-fix(fit): no   (fix via strict + AI repair)
-# Semantic problems (e.g. an arrow pointing the wrong way) are intentionally NOT
-# auto-checked here — geometry can't know intent; those are fixed at authoring /
+#   6. CROSS       an arrow whose body lies inside a filled box it doesn't connect
+#                  to (arrow drawn over a shape, or arrowhead buried in a box)
+#                    detect: yes   auto-fix(fit): no   (fix via strict + AI repair)
+#   7. OCCLUDE     an opaque shape drawn on top of text that isn't its own, hiding
+#                  the label behind it (e.g. an emphasis overlay over a box's name)
+#                    detect: yes   auto-fix(fit): no   (fix via strict + AI repair)
+# Other semantic problems (e.g. an arrow pointing the wrong way) are intentionally
+# NOT auto-checked here — geometry can't know intent; those are fixed at authoring /
 # AI-generation time. Detection runs after every play AND at end of render, so
 # transient mid-scene violations are caught, not just the final frame.
 
@@ -230,6 +236,92 @@ def _filled_panels(scene):
     return out
 
 
+def _solid_blocks(scene):
+    """Opaque filled shapes a viewer can't see through — phase boxes, cards, the
+    hub circle — excluding full-bleed bars/backgrounds. Used to catch arrows that
+    cross over a shape (CROSS) and overlays that hide text behind them (OCCLUDE)."""
+    fw, fh = config.frame_width, config.frame_height
+    out, ids = [], set()
+    for top in scene.mobjects:
+        for m in top.get_family():
+            if isinstance(m, (Rectangle, RoundedRectangle, Circle, Ellipse)) \
+                    and id(m) not in ids:
+                try:
+                    op = float(m.get_fill_opacity())
+                except Exception:
+                    op = 0.0
+                w, h = m.width, m.height
+                if op >= 0.5 and w > 0.4 and h > 0.4 and not (
+                    w >= 0.97 * fw or h >= 0.97 * fh
+                ):
+                    ids.add(id(m))
+                    out.append(m)
+    return out
+
+
+def _arrows(scene):
+    """Arrow-like connectors only — anything carrying an arrow tip (Arrow,
+    CurvedArrow, a tipped flow Arc). Plain Lines / spokes are deliberately excluded:
+    they are often drawn behind boxes on purpose (e.g. hub spokes to a box centre)."""
+    out, ids = [], set()
+    for top in scene.mobjects:
+        for m in top.get_family():
+            if id(m) in ids:
+                continue
+            has_tip = getattr(m, "has_tip", None)
+            try:
+                tipped = callable(has_tip) and bool(m.has_tip())
+            except Exception:
+                tipped = False
+            if tipped:
+                ids.add(id(m))
+                out.append(m)
+    return out
+
+
+def _inside_block(pt, block, inset):
+    """True if point ``pt`` lies inside ``block`` shrunk on all sides by ``inset``
+    (so merely grazing the border doesn't count). Ellipse/Circle use a radial test,
+    everything else its axis-aligned box."""
+    x, y = pt[0], pt[1]
+    if isinstance(block, (Circle, Ellipse)) and not isinstance(block, Rectangle):
+        c = block.get_center()
+        rx, ry = block.width / 2.0 - inset, block.height / 2.0 - inset
+        if rx <= 0 or ry <= 0:
+            return False
+        return ((x - c[0]) / rx) ** 2 + ((y - c[1]) / ry) ** 2 <= 1.0
+    x0, x1, y0, y1 = _bbox(block)
+    return (x0 + inset) <= x <= (x1 - inset) and (y0 + inset) <= y <= (y1 - inset)
+
+
+def _block_label(block, texts):
+    """Name a shape by the text sitting inside it (so a message reads 'A' / 'Vision'
+    instead of 'RoundedRectangle'); fall back to the class name."""
+    bb = _bbox(block)
+    for t in texts:
+        tb = _bbox(t)
+        cx, cy = (tb[0] + tb[1]) / 2.0, (tb[2] + tb[3]) / 2.0
+        if bb[0] <= cx <= bb[1] and bb[2] <= cy <= bb[3]:
+            return _text_label(t)
+    return block.__class__.__name__
+
+
+def _render_order(scene):
+    """Map id(mobject) -> first index in the flattened draw order. A larger index
+    is drawn later, i.e. on top (ties broken by z_index by the caller)."""
+    order, i = {}, 0
+    for top in scene.mobjects:
+        for m in top.get_family():
+            if id(m) not in order:
+                order[id(m)] = i
+                i += 1
+    return order
+
+
+def _z(m):
+    return getattr(m, "z_index", 0) or 0
+
+
 def _detect_layout_issues(scene, overlap_frac=0.5, eps=0.05):
     """Pure detector: return the list of violation strings (no logging,
     no raising). Shared by the end-of-render check and the during-render pass."""
@@ -320,6 +412,54 @@ def _detect_layout_issues(scene, overlap_frac=0.5, eps=0.05):
                     f"of ({ov / ta * 100:.0f}% of the text is inside the box)"
                 )
                 break
+
+    # 6. Arrow crossing OVER a shape it doesn't terminate at. The BODY of an arrow
+    #    (its middle 60%, excluding the two endpoint approaches) should never lie
+    #    inside a filled box/circle: a correctly routed arrow runs edge-to-edge
+    #    through the gap, touching a box only at its border near the tip. Catches
+    #    arrows drawn on top of phase boxes and arrowheads buried inside a box.
+    blocks = _solid_blocks(scene)
+    for arr in _arrows(scene):
+        fam = arr.get_family()
+        try:
+            samples = [arr.point_from_proportion(t)
+                       for t in (0.2, 0.35, 0.5, 0.65, 0.8)]
+        except Exception:
+            continue
+        for blk in blocks:
+            if blk in fam or arr in blk.get_family():
+                continue
+            if any(_inside_block(p, blk, 0.10) for p in samples):
+                issues.append(
+                    f"CROSS: an arrow crosses over {_block_label(blk, texts)!r} "
+                    "(its body lies inside a box it doesn't connect to — route it "
+                    "edge-to-edge through the gap, arcing to the outer/far side)"
+                )
+                break
+
+    # 7. Opaque shape drawn ON TOP of text that isn't its own — an emphasis overlay
+    #    or panel covering a label behind it (INTRUDE catches text poking INTO a
+    #    foreign panel; this catches a panel hiding text that sits UNDER it).
+    order = _render_order(scene)
+    for blk in blocks:
+        bb = _bbox(blk)
+        bz = (_z(blk), order.get(id(blk), 0))
+        for m in texts:
+            if m in blk.get_family() or blk in m.get_family():
+                continue
+            tb = _bbox(m)
+            tcx, tcy = (tb[0] + tb[1]) / 2.0, (tb[2] + tb[3]) / 2.0
+            if not (bb[0] <= tcx <= bb[1] and bb[2] <= tcy <= bb[3]):
+                continue
+            ta = (tb[1] - tb[0]) * (tb[3] - tb[2])
+            if ta <= 1e-6 or _overlap_area(tb, bb) <= 0.6 * ta:
+                continue
+            if bz > (_z(m), order.get(id(m), 0)):   # block is in front -> hides text
+                issues.append(
+                    f"OCCLUDE: {_text_label(m)!r} is hidden behind an opaque shape "
+                    "drawn on top of it (emphasize with a stroke / translucent fill "
+                    "and keep the label on top)"
+                )
 
     return issues
 

@@ -18,6 +18,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import List, Optional
 
+from . import config
 from .media import ffprobe_duration, is_up_to_date
 from .models import Storyboard
 
@@ -39,17 +40,31 @@ class ClipAssembler:
                 continue
             if not video.exists() or not audio.exists():
                 raise SystemExit(f"Missing inputs for muxing {clip}: {video}, {audio}")
-            subprocess.run(
-                ["ffmpeg", "-y", "-loglevel", "error",
-                 "-i", str(video), "-i", str(audio),
-                 "-map", "0:v:0", "-map", "1:a:0",
-                 "-c:v", "copy",
-                 "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
-                 "-af", "aresample=48000,pan=stereo|c0=c0|c1=c0",
-                 "-shortest", "-movflags", "+faststart",
-                 str(clip)],
-                check=True,
-            )
+            base = ["ffmpeg", "-y", "-loglevel", "error",
+                    "-i", str(video), "-i", str(audio),
+                    "-map", "0:v:0", "-map", "1:a:0"]
+            pad = config.SCENE_TAIL_PAD_SECONDS
+            if pad and pad > 0:
+                # Hold the last frame for `pad`s with matching trailing silence so
+                # each scene ends on a brief beat to digest before the next. tpad
+                # synthesises frames, so the video is re-encoded here (the concat
+                # pass re-encodes anyway). The merged SRT offsets by clip length, so
+                # subtitles stay aligned and no cue runs into the silent tail.
+                cmd = base + [
+                    "-vf", f"tpad=stop_mode=clone:stop_duration={pad}",
+                    "-af",
+                    f"aresample=48000,pan=stereo|c0=c0|c1=c0,apad=pad_dur={pad}",
+                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+                    "-pix_fmt", "yuv420p",
+                    "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+                    "-shortest", "-movflags", "+faststart", str(clip)]
+            else:
+                cmd = base + [
+                    "-c:v", "copy",
+                    "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+                    "-af", "aresample=48000,pan=stereo|c0=c0|c1=c0",
+                    "-shortest", "-movflags", "+faststart", str(clip)]
+            subprocess.run(cmd, check=True)
 
     def concat(self, storyboard: Storyboard, output: Path, lang: str, orient: str,
                force: bool = False) -> Path:

@@ -46,6 +46,34 @@ scene_guidance: |
   - GOVERNANCE PROCESS (capability / governance topics): a small cycle, or a
     central board with its controls around it, plus a scale or ladder for a
     compliance level or a maturity level.
+  ARROWS & CONNECTORS — every arrow must run cleanly between shapes WITHOUT
+  crossing over, clipping, or resting on top of any box it does not connect:
+  - Route every connector EDGE-TO-EDGE: compute where it leaves the source box's
+    border and where it meets the target box's border, and start/end it THERE (a
+    small gap is fine). Never let an arrow begin or end inside a box, and never let
+    its arrowhead land on top of a box's fill or text. For a ray from a box centre,
+    find the border-exit point first (see how the landscape ADM scenes use a
+    box-edge helper) rather than aiming at the box centre.
+  - On the ADM ring, the clockwise FLOW arrow between two adjacent phases curves
+    through the GAP between them on the OUTER side of the ring (bowing AWAY from the
+    central hub), so its body never overlaps a phase box or the hub. Give it enough
+    angular clearance that the arrowhead sits in the gap, not on a box.
+  - The CLOSING / loop arrow (Phase H back to Phase A) and the Preliminary→Phase A
+    arrow must bow to the OUTER / far side of the ring — away from the centre and
+    NOT across the interior or over the A/H boxes. When two boxes sit side by side,
+    arc OVER the top (the far side from any content below), clearing both boxes.
+  - Keep flow arrows from overlapping the hub, the spokes, or each other.
+  - For a LOOP-BACK / return / "repeats" connector in a LINEAR (row or column) layout
+    — e.g. the last step looping to the first — do NOT use a wide curve that cuts
+    across or clips the boxes. Use a STRAIGHT line, or a right-angled (90° elbow /
+    L-shaped) path routed in the CLEAR MARGIN around the outside of the boxes (out to
+    the side, along the top/bottom, back in), so it never passes over any box.
+  EMPHASIS — when you put a phase / card "in focus", NEVER cover its own text with
+  an opaque shape or overlay. Emphasize with a stroke-colour / stroke-width change,
+  a glow or a TRANSLUCENT fill (fill_opacity <= 0.2), or Indicate / Circumscribe —
+  and always keep the label drawn ON TOP and fully legible. A highlight fill behind
+  the text must let the text read; if you add any overlay rectangle, give it low
+  opacity and put the text above it.
   Semantic theme colors throughout: PRIMARY titles, ACCENT labels / relationships,
   HIGHLIGHT the item in focus, OK a finished / coherent result, DANGER a gap or
   problem. NEVER invent an "official TOGAF icon" — TOGAF has no standard icon set;
