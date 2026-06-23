@@ -79,7 +79,7 @@ DEFAULT_GEMINI_MODEL = "gemini-2.5-flash-preview-tts"
 # 0.60 is the lowest usable value but sits right at the edge; 1.0 keeps a safe
 # margin above the cliff (the conventional default) at a small cost to voice
 # consistency, which the style preamble below largely covers. Do NOT go ≤ 0.55.
-GEMINI_TTS_TEMPERATURE = 1.0
+GEMINI_TTS_TEMPERATURE = 1.5
 GEMINI_TTS_STYLE = (
     "Narrate in a calm, clear, professional male voice with a warm, even tone "
     "and a steady pace, keeping exactly the same voice from start to finish"

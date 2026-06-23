@@ -23,15 +23,34 @@ scene_guidance: |
   `_common` shapes (RoundedRectangle, Circle, Arc, the arrow helpers, Text/
   MarkupText) so the result is identical at EVERY --effort level. Different TOGAF
   topics call for different visual methods — render whichever the scene describes:
-  - ADM CYCLE (process / phase topics): Phases A–H as labelled rounded boxes
-    arranged clockwise on a RING, joined by curved arrows, with Requirements
-    Management as the central hub joined to every phase. The Preliminary phase is
-    NOT on the ring — draw it as a separate box OUTSIDE the ring with one arrow
-    feeding INTO Phase A (Architecture Vision); it is the one-time setup before the
-    cycle begins. Close the ring with an arrow from Phase H (Architecture Change
-    Management) back to Phase A (Architecture Vision) — a change triggers a new lap
-    starting at the Vision. Keep the SAME phase names and clockwise order every time
-    the ADM appears.
+  - ADM CYCLE (process / phase topics): you do NOT have to draw a circular ring —
+    a clean LINEAR layout is PREFERRED and easier to get right. Pick whichever of
+    these you can render cleanly, in this order:
+    1. LINEAR (preferred): the phases as labelled boxes in a single horizontal row
+       (or vertical column), joined in order by STRAIGHT edge-to-edge arrows. Draw
+       the Preliminary phase as a separate box BEFORE Phase A with one arrow into
+       Phase A (Architecture Vision). Close the cycle with ONE right-angled (90°
+       elbow / L-shaped) connector from the LAST phase shown back to Phase A, routed
+       in the clear margin AROUND the row (out, along the top or bottom, back in) so
+       it never crosses or clips a box. Place Requirements Management as a labelled
+       box OUTSIDE the linear sequence (beside or beneath the row), joined by a THIN
+       light line to EACH phase A–H it underpins — but NOT to the Preliminary phase
+       (Requirements Management spans the cycle, not the one-time setup before it).
+       Keep these thin lines visually subordinate to the main flow arrows.
+    2. RING (only if it renders cleanly): Phases A–H as boxes on a ring joined by
+       STRAIGHT edge-to-edge arrows (a clean octagon — NOT inward-bowing curves),
+       Requirements Management as the central hub, the Preliminary phase OUTSIDE the
+       ring with one arrow into Phase A, and a Phase-H→Phase-A closing arc bowed to
+       the OUTER/far side. Use this ONLY if every arrow stays clear of every box.
+    3. LOCAL (simplest fallback, when the full set is too cramped to draw cleanly):
+       draw just the phase in focus PLUS its immediate previous and next phases if
+       they exist — "… → previous → THIS PHASE → next → …" — focus phase in
+       HIGHLIGHT, with a small "…" or note that the cycle continues. When the focus
+       phase is Phase H, still show its loop back to Phase A.
+    Whichever layout you use, keep these facts: the SAME phase names and A–H order;
+    the cycle is Phases A–H ONLY; the Preliminary phase is NEVER one of the A–H
+    boxes (it precedes Phase A); and Phase H (Architecture Change Management) returns
+    to Phase A (Architecture Vision).
   - MATRIX / GRID (techniques — Gap Analysis, Risk, Stakeholder mapping): a simple
     labelled grid with row/column headers and cells, never code. Mark a gap or a
     high risk cell in DANGER and a satisfied / carried-forward cell in OK.
@@ -54,10 +73,11 @@ scene_guidance: |
     its arrowhead land on top of a box's fill or text. For a ray from a box centre,
     find the border-exit point first (see how the landscape ADM scenes use a
     box-edge helper) rather than aiming at the box centre.
-  - On the ADM ring, the clockwise FLOW arrow between two adjacent phases curves
-    through the GAP between them on the OUTER side of the ring (bowing AWAY from the
-    central hub), so its body never overlaps a phase box or the hub. Give it enough
-    angular clearance that the arrowhead sits in the gap, not on a box.
+  - Between adjacent phases (a linear row/column OR a ring), PREFER a STRAIGHT
+    edge-to-edge arrow — it never has an ambiguous curve direction and never clips a
+    box. If you do curve a ring's flow arrow, bow it through the gap on the OUTER
+    side (AWAY from the central hub) with enough clearance that the arrowhead sits in
+    the gap, not on a box — never bow it inward toward the hub.
   - The CLOSING / loop arrow (Phase H back to Phase A) and the Preliminary→Phase A
     arrow must bow to the OUTER / far side of the ring — away from the centre and
     NOT across the interior or over the A/H boxes. When two boxes sit side by side,

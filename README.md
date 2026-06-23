@@ -208,7 +208,7 @@ Run everything (default) or just one stage with `--stage`:
 | `audio`   | Run the TTS engine on each script; write `audio/<lang>/*.mp3` + per-scene `audio/<lang>/*.srt` |
 | `scenes`  | Materialize `scenes_<orient>/_common.py` from templates and AI-generate any missing per-scene `.py` files |
 | `render`  | Run Manim with `MANIM_LANG=<lang>` and `MANIM_AUDIO_DIR=<output>/audio` for each (lang, orientation) pair |
-| `mux`     | Combine raw video + MP3 into per-scene clips at 48 kHz stereo AAC |
+| `mux`     | Combine raw video + MP3 into per-scene clips at 48 kHz stereo AAC, then freeze the last frame for a short **digest hold** (`config.SCENE_TAIL_PAD_SECONDS`, default 1s, with matching silence) so each scene ends on a beat to absorb before the next |
 | `concat`  | Concat clips into `final/<title>_<orient>_<lang>.mp4` |
 | `thumbnails` | Save a poster frame per (orientation, language) — the first scene's last second — to `final/<title>_<orient>_<lang>.png` |
 | `srt`     | Merge per-scene SRTs into `final/<title>_<orient>_<lang>.srt` with proper offsets |
@@ -427,15 +427,21 @@ total). The duration range is enforced at three points:
    estimates each language's spoken time from the word count (~2 words/sec) and,
    if it's over the cap, asks the AI to **compress the over-long scenes** so the
    estimate fits — *before* spending a TTS pass.
-3. **After TTS (measured)** — it then ffprobes the real per-scene audio and, if a
-   language is still over, compresses the narration by the measured overshoot,
-   drops the stale audio, and **re-synthesizes**. This is the accurate guarantee.
+3. **After TTS (measured, cap)** — it then ffprobes the real per-scene audio and,
+   if a language is still over the cap, compresses the narration by the measured
+   overshoot, drops the stale audio, and **re-synthesizes**. This is the accurate
+   guarantee for the ceiling.
+4. **After TTS (measured, floor)** — symmetrically, if a language's measured audio
+   sums to **under** `min_duration` (e.g. terse Indonesian that renders well short
+   of 2 minutes), the generator **expands** every spoken scene's narration toward
+   the floor — matching the other language's depth where available — drops the
+   stale audio, and re-synthesizes. So a too-short language is lifted into range,
+   not just a too-long one trimmed.
 
 Narration is generated tightly (~1.9 words/sec, as a hard word limit) so it
-usually fits on the first pass; steps 2–3 are the safety net. To leave more
-headroom, trim the per-scene `fallback_duration` values. To satisfy the
-2-minute floor, extend or add scenes until their `fallback_duration` values sum
-to at least 120 seconds.
+usually lands in range on the first pass; steps 2–4 are the safety net (3 trims a
+language that's too long, 4 expands one that's too short). To leave more headroom
+under the cap, trim the per-scene `fallback_duration` values.
 
 ### Bringing your own Manim sources
 
@@ -657,8 +663,10 @@ Authenticate either way:
 ## Layout self-check
 
 AI-generated scenes occasionally place text past the frame edge, stack two
-labels on the same spot, spill text outside its panel, or (in portrait) drop
-content into the caption zone. `--check-layout` turns on a render-time guard,
+labels on the same spot, spill text outside its panel, drop content into the
+caption zone (portrait), run an arrow across a box it doesn't connect to, or
+hide a label behind an opaque emphasis overlay. `--check-layout` turns on a
+render-time guard,
 implemented in the scene `_common.py`. Detection runs **after every animation
 step and at the end of every `Scene.render`**, so a violation that only exists
 mid-scene (a callout that later fades out) is caught too — not just the final
