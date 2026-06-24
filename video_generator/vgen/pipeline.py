@@ -96,6 +96,7 @@ class VideoPipeline:
         self.duration.fit_before_tts(self.storyboard, self.output)        # estimate + compress
         self.tts.synthesize_storyboard(self.storyboard, self.output, self.options.force)
         self.duration.enforce_after_tts(self.storyboard, self.output)     # measure + shrink over cap
+        self.duration.fill_short_scenes_after_tts(self.storyboard, self.output)  # fill scenes to their length
         self.duration.enforce_floor_after_tts(self.storyboard, self.output)  # measure + grow under floor
 
     def stage_scenes(self) -> None:

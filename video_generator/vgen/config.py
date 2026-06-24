@@ -82,7 +82,8 @@ DEFAULT_GEMINI_MODEL = "gemini-2.5-flash-preview-tts"
 GEMINI_TTS_TEMPERATURE = 1.5
 GEMINI_TTS_STYLE = (
     "Narrate in a calm, clear, professional male voice with a warm, even tone "
-    "and a steady pace, keeping exactly the same voice from start to finish"
+    "and a brisk, lively pace — a little faster than average but never rushed — "
+    "keeping exactly the same voice from start to finish"
 )
 
 # Friendly `voice: male|female` aliases for the simplified storyboard format,

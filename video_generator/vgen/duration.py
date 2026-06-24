@@ -112,6 +112,57 @@ class DurationFitter:
                 break
             self.tts.synthesize_storyboard(storyboard, output, force=False)
 
+    def fill_short_scenes_after_tts(self, storyboard: Storyboard, output: Path,
+                                    margin: float = 0.82, passes: int = 2) -> None:
+        """Fill any single scene whose narration renders much SHORTER than that
+        scene's intended length (its ``fallback_duration``), so the narration covers
+        the scene instead of leaving a long silent tail.
+
+        A scene's video length is ``max(animation_time, narration)``: if the
+        narration is shorter than the animation, the video can't shrink to match and
+        the clip ends with seconds of silence (e.g. the English "five questions" ran
+        ~6s silent while the naturally-longer Indonesian matched the video exactly).
+        This expands such a scene's narration toward its ``fallback_duration`` and
+        re-synthesises ONLY that scene — no re-render needed; the mux holds the last
+        frame for any small residual. Cap-safe: the sum of ``fallback_duration``
+        values is already constrained to <= ``max_duration`` at parse time, so
+        filling each scene to its own length can't blow the whole-video cap.
+        """
+        if storyboard.ai_cli in ("", "none", None):
+            return
+        for _ in range(passes):
+            regenerated = False
+            for lang in storyboard.languages:
+                for scene in storyboard.scenes:
+                    text = scene.narration.get(lang, "")
+                    target = scene.fallback_duration
+                    if not text.strip() or target <= 0:
+                        continue
+                    measured = self._scene_seconds(storyboard, output, lang, scene,
+                                                   measured=True)
+                    if measured >= target * margin:
+                        continue
+                    target_words = int(target * config.ESTIMATE_WORDS_PER_SECOND)
+                    if target_words <= count_words(text):
+                        continue
+                    progress.log(f"  [{lang}] scene {scene.basename}: narration "
+                                 f"{measured:.0f}s << scene {target:.0f}s — filling")
+                    new_text = self._expand_narration(storyboard, lang, text,
+                                                      target_words, scene)
+                    if count_words(new_text) <= count_words(text):
+                        continue
+                    scene.narration[lang] = new_text
+                    (output / "scripts" / lang / f"{scene.basename}.txt").write_text(
+                        new_text.strip() + "\n", encoding="utf-8")
+                    (output / "audio" / lang / f"{scene.basename}.mp3").unlink(missing_ok=True)
+                    (output / "audio" / lang / f"{scene.basename}.srt").unlink(missing_ok=True)
+                    progress.log(f"    ↳ {lang}/{scene.basename}: "
+                                 f"{count_words(text)}→{count_words(new_text)} words")
+                    regenerated = True
+            if not regenerated:
+                break
+            self.tts.synthesize_storyboard(storyboard, output, force=False)
+
     # --- helpers -----------------------------------------------------------
 
     def _scene_seconds(self, storyboard: Storyboard, output: Path, lang: str,

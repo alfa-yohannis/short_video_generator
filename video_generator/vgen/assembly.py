@@ -43,26 +43,37 @@ class ClipAssembler:
             base = ["ffmpeg", "-y", "-loglevel", "error",
                     "-i", str(video), "-i", str(audio),
                     "-map", "0:v:0", "-map", "1:a:0"]
-            pad = config.SCENE_TAIL_PAD_SECONDS
-            if pad and pad > 0:
-                # Hold the last frame for `pad`s with matching trailing silence so
-                # each scene ends on a brief beat to digest before the next. tpad
-                # synthesises frames, so the video is re-encoded here (the concat
-                # pass re-encodes anyway). The merged SRT offsets by clip length, so
-                # subtitles stay aligned and no cue runs into the silent tail.
+            pad = max(config.SCENE_TAIL_PAD_SECONDS or 0.0, 0.0)
+            # The clip length is the LONGER of (video, audio) plus the digest pad —
+            # padding whichever stream is shorter, never truncating either. The video
+            # is extended by freezing its last frame (tpad); the audio by trailing
+            # silence (apad). So a scene whose visuals outrun a short narration keeps
+            # its tail (e.g. a 5th card revealed after a short English narration
+            # stops), AND a narration longer than its visuals is never cut off. The
+            # old `-shortest` against the real audio chopped the video to the
+            # narration and dropped that tail.
+            vdur = ffprobe_duration(video)
+            adur = ffprobe_duration(audio)
+            target = max(vdur, adur) + pad
+            af = "aresample=48000,pan=stereo|c0=c0|c1=c0,apad"
+            if pad > 0 or adur > vdur + 0.02:
+                # Re-encode: freeze the last frame as long as needed (tpad), pad the
+                # audio with silence (apad), and cut BOTH at exactly `target`. tpad
+                # synthesises frames; the concat pass re-encodes anyway. The merged
+                # SRT offsets by clip length, so subtitles stay aligned.
                 cmd = base + [
-                    "-vf", f"tpad=stop_mode=clone:stop_duration={pad}",
-                    "-af",
-                    f"aresample=48000,pan=stereo|c0=c0|c1=c0,apad=pad_dur={pad}",
+                    "-vf", "tpad=stop_mode=clone:stop_duration=3600",
+                    "-af", af, "-t", f"{target:.3f}",
                     "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
                     "-pix_fmt", "yuv420p",
                     "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
-                    "-shortest", "-movflags", "+faststart", str(clip)]
+                    "-movflags", "+faststart", str(clip)]
             else:
+                # pad==0 and the video is already the longer side: stream-copy the
+                # video (no re-encode) and pad the audio with silence up to it.
                 cmd = base + [
-                    "-c:v", "copy",
+                    "-c:v", "copy", "-af", af,
                     "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
-                    "-af", "aresample=48000,pan=stereo|c0=c0|c1=c0",
                     "-shortest", "-movflags", "+faststart", str(clip)]
             subprocess.run(cmd, check=True)
 

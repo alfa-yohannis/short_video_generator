@@ -94,6 +94,12 @@ scene_guidance: |
   and always keep the label drawn ON TOP and fully legible. A highlight fill behind
   the text must let the text read; if you add any overlay rectangle, give it low
   opacity and put the text above it.
+  TEXT SIZING & WRAPPING — Manim does NOT auto-wrap: a long string stays on ONE line
+  and, if it doesn't fit its panel, gets scaled down — often to an illegible size.
+  So keep every label readable (>= ~12pt effective): for any caption or sentence,
+  insert explicit line breaks (\n) to wrap it onto 2–4 SHORT lines and/or give its
+  panel enough room — never rely on shrinking a long single line to fit. Reserve the
+  smallest sizes for short eyebrow-style labels only.
   Semantic theme colors throughout: PRIMARY titles, ACCENT labels / relationships,
   HIGHLIGHT the item in focus, OK a finished / coherent result, DANGER a gap or
   problem. NEVER invent an "official TOGAF icon" — TOGAF has no standard icon set;
@@ -146,5 +152,5 @@ storyboard:
       match: [capability framework, governance, architecture board, compliance,
               skills framework, maturity]
       exemplar: exemplars/governance.md
-cli_flags: [--tts, gemini_id, --ai-cli, claude, --effort, xhigh,
+cli_flags: [--tts, edge, --ai-cli, claude, --effort, xhigh,
             --run-preparation, --refine-storyboard, --validate-scenes, --force]

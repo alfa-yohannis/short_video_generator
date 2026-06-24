@@ -208,7 +208,7 @@ Run everything (default) or just one stage with `--stage`:
 | `audio`   | Run the TTS engine on each script; write `audio/<lang>/*.mp3` + per-scene `audio/<lang>/*.srt` |
 | `scenes`  | Materialize `scenes_<orient>/_common.py` from templates and AI-generate any missing per-scene `.py` files |
 | `render`  | Run Manim with `MANIM_LANG=<lang>` and `MANIM_AUDIO_DIR=<output>/audio` for each (lang, orientation) pair |
-| `mux`     | Combine raw video + MP3 into per-scene clips at 48 kHz stereo AAC, then freeze the last frame for a short **digest hold** (`config.SCENE_TAIL_PAD_SECONDS`, default 1s, with matching silence) so each scene ends on a beat to absorb before the next |
+| `mux`     | Combine raw video + MP3 into per-scene clips at 48 kHz stereo AAC. The audio is padded with silence to the **video's** full length (never the other way round), so a scene whose visuals outrun a short narration keeps its tail instead of being truncated to the audio. Then the last frame is frozen for a short **digest hold** (`config.SCENE_TAIL_PAD_SECONDS`, default 1s) so each scene ends on a beat to absorb before the next |
 | `concat`  | Concat clips into `final/<title>_<orient>_<lang>.mp4` |
 | `thumbnails` | Save a poster frame per (orientation, language) — the first scene's last second — to `final/<title>_<orient>_<lang>.png` |
 | `srt`     | Merge per-scene SRTs into `final/<title>_<orient>_<lang>.srt` with proper offsets |
@@ -437,10 +437,20 @@ total). The duration range is enforced at three points:
    the floor — matching the other language's depth where available — drops the
    stale audio, and re-synthesizes. So a too-short language is lifted into range,
    not just a too-long one trimmed.
+5. **After TTS (per-scene fill)** — a *per-scene* version of step 4: each scene's
+   audio is compared to **that scene's own** intended length (its
+   `fallback_duration`). A scene's video is `max(animation_time, narration)`, so a
+   narration much shorter than the scene leaves the clip ending in silence (the
+   classic symptom: one language shows a late-revealed item with no voice-over while
+   the other, naturally longer, narrates it). This **fills** such a scene's
+   narration toward its own length and re-synthesizes just that scene — no re-render
+   (the mux holds the last frame for any small residual), and cap-safe since the
+   `fallback_duration` values already sum to ≤ the cap.
 
 Narration is generated tightly (~1.9 words/sec, as a hard word limit) so it
-usually lands in range on the first pass; steps 2–4 are the safety net (3 trims a
-language that's too long, 4 expands one that's too short). To leave more headroom
+usually lands in range on the first pass; steps 2–5 are the safety net (3 trims a
+language that's too long, 4 lifts a whole language that's too short, 5 fills an
+individual scene that renders short of its own length). To leave more headroom
 under the cap, trim the per-scene `fallback_duration` values.
 
 ### Bringing your own Manim sources
@@ -664,9 +674,9 @@ Authenticate either way:
 
 AI-generated scenes occasionally place text past the frame edge, stack two
 labels on the same spot, spill text outside its panel, drop content into the
-caption zone (portrait), run an arrow across a box it doesn't connect to, or
-hide a label behind an opaque emphasis overlay. `--check-layout` turns on a
-render-time guard,
+caption zone (portrait), run an arrow across a box it doesn't connect to,
+hide a label behind an opaque emphasis overlay, or shrink a long line to an
+illegible font to make it fit. `--check-layout` turns on a render-time guard,
 implemented in the scene `_common.py`. Detection runs **after every animation
 step and at the end of every `Scene.render`**, so a violation that only exists
 mid-scene (a callout that later fades out) is caught too — not just the final
@@ -685,6 +695,7 @@ sync with it):
 | 5 | **INTRUDE** | text resting over a *filled panel it isn't part of* (e.g. a note line on a card's bottom padding) — caught even when no glyphs collide and the overlap is well under half a block | ✅ | ❌ fixed via `strict` + AI repair |
 | 6 | **CROSS** | an arrow whose **body** (its middle, excluding the endpoint approaches) lies inside a filled box it doesn't connect to — an arrow drawn over a shape, or an arrowhead buried inside a box instead of stopping at its border. Plain lines/spokes are excluded (often drawn behind boxes on purpose) | ✅ | ❌ fixed via `strict` + AI repair |
 | 7 | **OCCLUDE** | an *opaque* shape drawn **on top of** text that isn't its own, hiding the label behind it (e.g. an emphasis overlay covering a box's name). The mirror of INTRUDE: INTRUDE is text over a foreign panel, OCCLUDE is a panel over text underneath it | ✅ | ❌ fixed via `strict` + AI repair |
+| 8 | **SMALLFONT** | text rendering below `MIN_FONT_SIZE` (default 11) — typically a long line `fit_inside` has squeezed to fit a panel (Manim doesn't auto-wrap, so a too-wide single line gets scaled down to an illegible size). `font_size` tracks scaling, so the shrunk size is what's checked | ✅ | ❌ fixed via `strict` + AI repair (enlarge / shorten / wrap with `\n`) |
 
 Not auto-checked: other **semantic** problems such as an arrow pointing the wrong
 direction. Geometry can't know the intended direction, so those are fixed at

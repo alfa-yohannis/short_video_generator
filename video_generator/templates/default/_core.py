@@ -134,10 +134,19 @@ MarkupText.__init__ = _patched_markup_init
 #   7. OCCLUDE     an opaque shape drawn on top of text that isn't its own, hiding
 #                  the label behind it (e.g. an emphasis overlay over a box's name)
 #                    detect: yes   auto-fix(fit): no   (fix via strict + AI repair)
+#   8. SMALLFONT   text rendering below MIN_FONT_SIZE — usually a long line squeezed
+#                  by fit_inside / .scale() to fit a panel (font_size reflects scale)
+#                    detect: yes   auto-fix(fit): no   (fix via strict + AI repair)
 # Other semantic problems (e.g. an arrow pointing the wrong way) are intentionally
 # NOT auto-checked here — geometry can't know intent; those are fixed at authoring /
 # AI-generation time. Detection runs after every play AND at end of render, so
 # transient mid-scene violations are caught, not just the final frame.
+
+# Minimum readable rendered font size (in Manim font-size units, which track
+# scaling). The default title-bar eyebrow is 13, so 11 leaves headroom for it while
+# still catching text that fit_inside has shrunk to an illegible size.
+MIN_FONT_SIZE = 11.0
+
 
 class LayoutError(Exception):
     """Raised in strict mode when a scene's text leaves the frame or overlaps."""
@@ -460,6 +469,20 @@ def _detect_layout_issues(scene, overlap_frac=0.5, eps=0.05):
                     "drawn on top of it (emphasize with a stroke / translucent fill "
                     "and keep the label on top)"
                 )
+
+    # 8. Text rendered TOO SMALL to read. `font_size` reflects scaling, so a long
+    #    line squeezed by fit_inside / .scale() to fit a panel surfaces here even
+    #    when its nominal size looked fine in the source. Manim does NOT auto-wrap,
+    #    so the fix is to enlarge, shorten, or insert line breaks (\n) so the text
+    #    fits its panel WITHOUT being shrunk below the floor.
+    for m in texts:
+        fs = getattr(m, "font_size", None)
+        if fs is not None and fs < MIN_FONT_SIZE - 0.5:
+            issues.append(
+                f"SMALLFONT: {_text_label(m)!r} renders at font_size {fs:.1f}, "
+                f"below the {MIN_FONT_SIZE:.0f} minimum — enlarge it, shorten it, or "
+                "wrap it onto more lines (insert \\n) so it fits without shrinking."
+            )
 
     return issues
 

@@ -122,6 +122,49 @@ def test_mux_and_concat_pipeline(tmp_path):
     assert media.ffprobe_duration(final) == pytest.approx(2.0 + 2 * pad, abs=0.4)
 
 
+@requires("ffmpeg", "ffprobe")
+def test_mux_keeps_video_that_outruns_audio(tmp_path):
+    """A scene whose VIDEO runs longer than its narration must keep its full
+    length — content rendered after the audio ends (e.g. a final card revealed
+    once a short narration has stopped) must not be truncated to the audio."""
+    sb = make_storyboard(title="demo", languages=["id"], orientations=["landscape"],
+                         scenes=[_scene("01_a")])
+    lang, orient = "id", "landscape"
+    vdir = tmp_path / "video" / lang / orient
+    adir = tmp_path / "audio" / lang
+    vdir.mkdir(parents=True)
+    adir.mkdir(parents=True)
+    color_video(vdir / "01_a.mp4", seconds=2.0)     # video longer than the audio
+    silent_mp3(adir / "01_a.mp3", seconds=1.0)
+
+    ClipAssembler().mux(sb, tmp_path, lang, orient, force=False)
+    clip = tmp_path / "clips" / lang / orient / "01_a.mp4"
+    pad = config.SCENE_TAIL_PAD_SECONDS
+    # The clip is the VIDEO length (+ digest pad), NOT the 1s audio.
+    assert media.ffprobe_duration(clip) == pytest.approx(2.0 + pad, abs=0.4)
+
+
+@requires("ffmpeg", "ffprobe")
+def test_mux_keeps_audio_that_outruns_video(tmp_path):
+    """Symmetric guard: a narration longer than its visuals must not be cut off —
+    the clip is the longer of (video, audio) plus the digest pad, either way."""
+    sb = make_storyboard(title="demo", languages=["id"], orientations=["landscape"],
+                         scenes=[_scene("01_a")])
+    lang, orient = "id", "landscape"
+    vdir = tmp_path / "video" / lang / orient
+    adir = tmp_path / "audio" / lang
+    vdir.mkdir(parents=True)
+    adir.mkdir(parents=True)
+    color_video(vdir / "01_a.mp4", seconds=1.0)
+    silent_mp3(adir / "01_a.mp3", seconds=2.0)       # audio longer than the video
+
+    ClipAssembler().mux(sb, tmp_path, lang, orient, force=False)
+    clip = tmp_path / "clips" / lang / orient / "01_a.mp4"
+    pad = config.SCENE_TAIL_PAD_SECONDS
+    # The clip is the AUDIO length (+ digest pad), NOT the 1s video.
+    assert media.ffprobe_duration(clip) == pytest.approx(2.0 + pad, abs=0.4)
+
+
 @requires("ffmpeg")
 def test_mux_missing_inputs_raises(tmp_path):
     sb = make_storyboard(languages=["id"], orientations=["landscape"], scenes=[_scene("01_a")])
