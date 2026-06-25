@@ -2205,3 +2205,47 @@ def test_resolve_template_unknown_returns_none(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "USER_TEMPLATES_DIR", tmp_path / "user")
     monkeypatch.setattr(config, "TEMPLATES_DIR", tmp_path / "bundled")
     assert resolve_template_dir("does_not_exist", "landscape") is None
+
+
+# --- parallelism helper (vgen.parallel) ----------------------------------
+
+from vgen.parallel import resolve_workers, run_parallel   # noqa: E402
+
+
+def test_resolve_workers_caps_and_floor():
+    assert resolve_workers(4, None) == 4      # no --jobs -> stage cap as-is
+    assert resolve_workers(4, 10) == 4        # --jobs can't raise above the cap
+    assert resolve_workers(4, 1) == 1         # --jobs lowers it
+    assert resolve_workers(4, 0) == 1         # never below 1
+    assert resolve_workers(1, None) == 1
+
+
+def test_run_parallel_preserves_order_and_serial_equivalence():
+    items = list(range(25))
+    expected = [x * x for x in items]
+    assert run_parallel(items, lambda x: x * x, 4) == expected   # threaded
+    assert run_parallel(items, lambda x: x * x, 1) == expected   # serial path
+    assert run_parallel([], lambda x: x, 4) == []
+
+
+def test_run_parallel_reraises_first_exception():
+    def fn(x):
+        if x == 3:
+            raise ValueError("boom")
+        return x
+    with pytest.raises(ValueError, match="boom"):
+        run_parallel([1, 2, 3, 4, 5], fn, 4)
+
+
+def test_run_parallel_actually_runs_concurrently():
+    """A Barrier needing all N tasks at once only completes if they truly overlap;
+    a serial implementation would block on the first task forever."""
+    import threading
+    n = 4
+    barrier = threading.Barrier(n, timeout=5)
+
+    def fn(x):
+        barrier.wait()        # raises BrokenBarrierError on timeout if not concurrent
+        return x
+
+    assert sorted(run_parallel(list(range(n)), fn, n)) == list(range(n))

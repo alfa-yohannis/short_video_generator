@@ -126,6 +126,19 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Don't validate / auto-install dependencies before building")
     parser.add_argument("--no-ai-cli-check", action="store_true",
                         help="Skip the AI CLI presence check even if the storyboard declares one")
+    parser.add_argument(
+        "--no-fit-narration", action="store_true",
+        help="Keep narration verbatim — skip the duration-fitter passes that "
+             "compress/expand/fill narration to hit the length window. Use when you "
+             "provide exact narration scripts and don't want them rewritten.",
+    )
+    parser.add_argument(
+        "--jobs", type=int, default=None, metavar="N",
+        help="Parallelism ceiling for the per-scene stages (narration, TTS, scene "
+             "generation, render). Default: per-stage caps (AI 2, Edge-TTS 4, "
+             "Gemini-TTS 2, render ~cores-2). A number lowers every stage to "
+             "min(cap, N); --jobs 1 forces fully serial.",
+    )
     return parser
 
 
@@ -153,6 +166,8 @@ def options_from_args(args: argparse.Namespace) -> BuildOptions:
         skip_youtube=args.skip_youtube,
         skip_dep_check=args.skip_dep_check,
         no_ai_cli_check=args.no_ai_cli_check,
+        jobs=args.jobs,
+        no_fit_narration=args.no_fit_narration,
     )
 
 

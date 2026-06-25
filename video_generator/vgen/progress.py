@@ -9,6 +9,7 @@ real object you could create a second of (e.g. in a test).
 
 from __future__ import annotations
 
+import threading
 import time
 from contextlib import contextmanager
 from typing import Iterator
@@ -19,6 +20,9 @@ class ProgressLogger:
 
     def __init__(self) -> None:
         self._start = time.monotonic()
+        # Stages run their per-scene work on a thread pool; the lock keeps
+        # concurrent log lines from interleaving mid-string.
+        self._lock = threading.Lock()
 
     def reset(self) -> None:
         """Restart the stopwatch (called once at the beginning of a build)."""
@@ -34,8 +38,9 @@ class ProgressLogger:
         return f"{seconds // 60:02d}:{seconds % 60:02d}"
 
     def log(self, message: str) -> None:
-        """Print one progress line prefixed with the elapsed clock."""
-        print(f"[{self.clock()}] {message}", flush=True)
+        """Print one progress line prefixed with the elapsed clock (thread-safe)."""
+        with self._lock:
+            print(f"[{self.clock()}] {message}", flush=True)
 
     @contextmanager
     def stage(self, label: str) -> Iterator[None]:

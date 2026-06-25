@@ -23,6 +23,7 @@ from . import config
 from .ai_client import AiClient
 from .density import SceneTooDenseError, is_too_dense
 from .models import Scene, Storyboard
+from .parallel import resolve_workers, run_parallel
 from .preparation import is_noop_preparation, load_manifest
 from .progress import progress
 from .subjects import get_subject
@@ -67,6 +68,9 @@ class SceneSynthesizer:
     passes or the attempts run out — so the real render only ever sees scenes
     that already pass.
     """
+
+    #: `--jobs` ceiling, injected by build_pipeline (None = use the AI cap as-is).
+    jobs: Optional[int] = None
 
     def __init__(self, ai_client: AiClient,
                  validator: "Optional[SceneValidator]" = None,
@@ -175,6 +179,10 @@ class SceneSynthesizer:
         storyboard.scenes_portrait_dir = portrait_dir
 
         skeleton = self._read_skeleton()
+        # Materialize ran serially above (it writes each _common.py); now collect
+        # every (orient, scene) that still needs generating. common_src is captured
+        # per item, so the parallel workers share no mutable state.
+        work = []
         for orient, scenes_dir in dirs.items():
             common_src = self._read_common(scenes_dir)
             for scene in storyboard.scenes:
@@ -187,8 +195,14 @@ class SceneSynthesizer:
                         "configured to generate it. Either drop the .py in place "
                         "or set `ai_cli: claude` in the storyboard front-matter."
                     )
-                self._generate_one(storyboard, output, scene, orient, scene_path,
-                                   skeleton, common_src)
+                work.append((scene, orient, scene_path, common_src))
+
+        def _gen(item) -> None:
+            scene, orient, scene_path, common_src = item
+            self._generate_one(storyboard, output, scene, orient, scene_path,
+                               skeleton, common_src)
+
+        run_parallel(work, _gen, resolve_workers(config.MAX_PARALLEL_AI, self.jobs))
         return landscape_dir, portrait_dir
 
     # --- generation + repair ----------------------------------------------

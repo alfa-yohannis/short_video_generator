@@ -13,13 +13,18 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from . import config
 from .ai_client import AiClient
 from .models import Scene, Storyboard
+from .parallel import resolve_workers, run_parallel
 from .progress import progress
 
 
 class NarrationWriter:
     """Generates and persists narration scripts for every scene + language."""
+
+    #: `--jobs` ceiling, injected by build_pipeline (None = use the AI cap as-is).
+    jobs: Optional[int] = None
 
     def __init__(self, ai_client: AiClient) -> None:
         self.ai = ai_client
@@ -87,13 +92,30 @@ class NarrationWriter:
         scene.narration[lang] = text
         return text
 
+    def _ensure_scene(self, storyboard: Storyboard, scene: Scene, output: Path,
+                      write: bool) -> None:
+        """Ensure narration for ONE scene in every language. Languages are done
+        SEQUENTIALLY so the 2nd sees the 1st as its meaning reference (see
+        :meth:`build_prompt`); ``write`` also persists the script files."""
+        for lang in storyboard.languages:
+            text = self.ensure(storyboard, scene, lang, output=output)
+            if write:
+                (output / "scripts" / lang / f"{scene.basename}.txt").write_text(
+                    text.strip() + "\n", encoding="utf-8")
+
+    def ensure_all(self, storyboard: Storyboard, output: Path, *,
+                   write: bool) -> None:
+        """Generate narration for every scene. SCENES run in parallel (capped at
+        the AI limit); the two languages stay sequential within each scene to keep
+        the cross-language meaning hint. ``write`` saves scripts/<lang>/<name>.txt."""
+        if write:
+            for lang in storyboard.languages:
+                (output / "scripts" / lang).mkdir(parents=True, exist_ok=True)
+        workers = resolve_workers(config.MAX_PARALLEL_AI, self.jobs)
+        run_parallel(list(storyboard.scenes),
+                     lambda sc: self._ensure_scene(storyboard, sc, output, write),
+                     workers)
+
     def write_scripts(self, storyboard: Storyboard, output: Path) -> None:
         """Ensure every scene's narration exists and save it under scripts/."""
-        for lang in storyboard.languages:
-            (output / "scripts" / lang).mkdir(parents=True, exist_ok=True)
-        for scene in storyboard.scenes:
-            for lang in storyboard.languages:
-                text = self.ensure(storyboard, scene, lang, output=output)
-                (output / "scripts" / lang / f"{scene.basename}.txt").write_text(
-                    text.strip() + "\n", encoding="utf-8"
-                )
+        self.ensure_all(storyboard, output, write=True)

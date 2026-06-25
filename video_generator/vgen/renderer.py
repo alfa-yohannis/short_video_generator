@@ -22,9 +22,12 @@ import time
 from pathlib import Path
 from typing import List, Tuple
 
+from typing import Optional
+
 from . import config
 from .media import is_up_to_date
 from .models import Storyboard
+from .parallel import resolve_workers, run_parallel
 from .progress import progress
 from .scenes import SceneSynthesizer
 
@@ -113,8 +116,51 @@ class SceneValidator:
 class ManimRenderer:
     """Renders a storyboard's scenes to per-scene silent MP4s."""
 
+    #: `--jobs` ceiling, injected by build_pipeline (None = use the render cap).
+    jobs: Optional[int] = None
+
     def __init__(self, scene_synth: SceneSynthesizer) -> None:
         self.synth = scene_synth          # used to repair a failing scene
+
+    def render_all(self, storyboard: Storyboard, output: Path, langs, orients,
+                   force: bool, check_layout: str = "off",
+                   repair_attempts: int = 0) -> None:
+        """Render every stale (lang, orient, scene) clip, in parallel.
+
+        Each clip is independent (distinct ``video/<lang>/<orient>/<scene>.mp4``),
+        so they run on a thread pool capped at ``MAX_PARALLEL_RENDER``. Per-(lang,
+        orient) setup (dirs, env) is done once and captured per work item; the
+        repair loop inside ``_render_one`` is per-scene, so it parallelises too.
+        """
+        if not config.MANIM_BIN.exists():
+            raise SystemExit(f"manim binary not found at {config.MANIM_BIN}")
+        work = []
+        for lang in langs:
+            for orient in orients:
+                scenes_dir = storyboard.scenes_dir(orient)
+                if scenes_dir is None or not scenes_dir.exists():
+                    raise SystemExit(f"scenes_{orient}_dir does not exist: {scenes_dir}")
+                video_dir = output / "video" / lang / orient
+                media_dir = output / "manim_media" / lang / orient
+                video_dir.mkdir(parents=True, exist_ok=True)
+                media_dir.mkdir(parents=True, exist_ok=True)
+                env = self._render_env(output, lang, check_layout)
+                common_path = scenes_dir / "_common.py"
+                for scene in storyboard.scenes:
+                    dest = video_dir / f"{scene.basename}.mp4"
+                    scene_path = scenes_dir / scene.file
+                    if not scene_path.exists():
+                        raise SystemExit(f"Scene file missing: {scene_path}")
+                    if not force and is_up_to_date(dest, scene_path, common_path):
+                        continue
+                    work.append((scene, lang, orient, scenes_dir, media_dir, dest, env))
+
+        def _one(item) -> None:
+            scene, lang, orient, scenes_dir, media_dir, dest, env = item
+            self._render_one(storyboard, scene, lang, orient, scenes_dir, media_dir,
+                             dest, env, repair_attempts)
+
+        run_parallel(work, _one, resolve_workers(config.MAX_PARALLEL_RENDER, self.jobs))
 
     def render(self, storyboard: Storyboard, output: Path, lang: str, orient: str,
                force: bool, check_layout: str = "off", repair_attempts: int = 0) -> None:

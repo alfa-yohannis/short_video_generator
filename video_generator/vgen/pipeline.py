@@ -63,6 +63,8 @@ class BuildOptions:
     skip_youtube: bool = False
     skip_dep_check: bool = False
     no_ai_cli_check: bool = False
+    jobs: Optional[int] = None         # parallelism ceiling; None = per-stage caps, 1 = serial
+    no_fit_narration: bool = False     # keep narration verbatim (skip the duration-fitter passes)
 
 
 class VideoPipeline:
@@ -89,10 +91,13 @@ class VideoPipeline:
         self.narration.write_scripts(self.storyboard, self.output)
 
     def stage_audio(self) -> None:
-        # Make sure narration exists even if --stage audio is run on its own.
-        for scene in self.storyboard.scenes:
-            for lang in self.storyboard.languages:
-                self.narration.ensure(self.storyboard, scene, lang, output=self.output)
+        # Make sure narration exists even if --stage audio is run on its own
+        # (scenes in parallel, languages sequential within each scene).
+        self.narration.ensure_all(self.storyboard, self.output, write=False)
+        if self.options.no_fit_narration:
+            # Keep author-provided narration verbatim — no compress/expand/fill.
+            self.tts.synthesize_storyboard(self.storyboard, self.output, self.options.force)
+            return
         self.duration.fit_before_tts(self.storyboard, self.output)        # estimate + compress
         self.tts.synthesize_storyboard(self.storyboard, self.output, self.options.force)
         self.duration.enforce_after_tts(self.storyboard, self.output)     # measure + shrink over cap
@@ -105,11 +110,11 @@ class VideoPipeline:
     def stage_render(self) -> None:
         # Render assumes scene .py files exist; generate any that are missing.
         self.scene_synth.ensure_all(self.storyboard, self.output, force=False)
-        for lang in self.storyboard.languages:
-            for orient in self.storyboard.orientations:
-                self.renderer.render(self.storyboard, self.output, lang, orient,
-                                     self.options.force, check_layout=self.options.check_layout,
-                                     repair_attempts=self.options.repair_attempts)
+        self.renderer.render_all(
+            self.storyboard, self.output,
+            self.storyboard.languages, self.storyboard.orientations,
+            self.options.force, check_layout=self.options.check_layout,
+            repair_attempts=self.options.repair_attempts)
 
     def stage_mux(self) -> None:
         for lang in self.storyboard.languages:
@@ -185,11 +190,18 @@ def build_pipeline(storyboard: Storyboard, output: Path, options: BuildOptions) 
     validator = SceneValidator() if options.validate_scenes else None
     scene_synth = SceneSynthesizer(ai_client, validator=validator,
                                    validate_attempts=options.validate_attempts)
+    narration = NarrationWriter(ai_client)
+    renderer = ManimRenderer(scene_synth)
+    # One knob: the `--jobs` ceiling. Each collaborator lowers its own per-stage
+    # cap to min(cap, jobs); the DurationFitter re-uses tts_engine, so its
+    # re-synth runs parallel too.
+    for collaborator in (narration, scene_synth, renderer, tts_engine):
+        collaborator.jobs = options.jobs
     return VideoPipeline(
         storyboard, output, options,
-        narration=NarrationWriter(ai_client),
+        narration=narration,
         scene_synth=scene_synth,
-        renderer=ManimRenderer(scene_synth),
+        renderer=renderer,
         tts=tts_engine,
         assembler=ClipAssembler(),
         youtube=YouTubeMetadataWriter(ai_client),

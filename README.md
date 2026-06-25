@@ -609,11 +609,38 @@ python3 video_generator/generate_video.py --storyboard SB.md --output OUT --forc
 | `--skip-youtube` | off | Don't generate the `final/<title>_<orient>_<lang>.txt` metadata |
 | `--skip-dep-check` | off | Skip the startup dependency validation |
 | `--no-ai-cli-check` | off | Don't enforce AI CLI presence (every narration / scene `.py` pre-filled) |
+| `--jobs N` | *(per-stage caps)* | Parallelism ceiling for the per-scene stages (narration, TTS, scene-gen, render). Lowers every stage to `min(stage-cap, N)`; `--jobs 1` forces fully serial. See [Parallelism](#parallelism) |
 
 > `--force` removes only generator-owned subdirectories under `--output`
 > (`scripts/`, `audio/`, `video/`, `clips/`, `final/`, `scenes_landscape/`,
 > `scenes_portrait/`, `manim_media/`, `manim_check/`, `assets/`). Files you
 > placed there yourself (a `.gitignore`, a README, etc.) are left alone.
+
+---
+
+## Parallelism
+
+The four per-scene stages each run their independent units **concurrently** on a
+thread pool (the work is all blocking `subprocess` calls, which release the GIL —
+so threads give real parallelism without multiprocessing). Each unit writes its
+own files and shares no state, so the output is identical to a serial run, just
+faster:
+
+| Stage | Parallel unit | Default cap |
+|---|---|---|
+| narration | **scene** (the two languages stay sequential *within* a scene so the 2nd keeps the 1st as its meaning reference) | `MAX_PARALLEL_AI` = 2 |
+| TTS | **(language × scene)** — `id` and `en` voice concurrently | Edge 4, Gemini 2 |
+| scene generation | **(orientation × scene)** (after the one-time `_common.py` materialize) | `MAX_PARALLEL_AI` = 2 |
+| render | **(language × orientation × scene)** | `MAX_PARALLEL_RENDER` = `cores − 2` |
+
+The caps are conservative on purpose — the AI CLI and the free Edge/Gemini TTS
+services rate-limit bursts; render is CPU-bound. They live in
+[`video_generator/vgen/config.py`](video_generator/vgen/config.py)
+(`MAX_PARALLEL_*`). `--jobs N` is a global **ceiling** layered on top
+(`min(stage-cap, N)`), so `--jobs 1` is the fully-serial escape hatch and a larger
+number can't exceed a stage's own cap. The duration-fitter stays a serial barrier
+(it needs cross-scene totals) but it's cheap and runs inside the audio stage, so it
+blocks nothing downstream.
 
 ---
 

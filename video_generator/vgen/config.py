@@ -20,6 +20,7 @@ Layout on disk::
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 # --- Filesystem paths ------------------------------------------------------
@@ -130,6 +131,15 @@ SCENE_TAIL_PAD_SECONDS = 1.0
 # audio is produced. The real Edge/Gemini rate is ~2.0-2.2, so 2.0 errs
 # slightly long (safer for staying under a max-duration cap).
 ESTIMATE_WORDS_PER_SECOND = 2.0
+
+# --- Pipeline parallelism --------------------------------------------------
+# Each per-scene stage runs its independent (subprocess-bound) units on a thread
+# pool, capped per stage to respect rate limits / CPU. A `--jobs N` flag can only
+# LOWER these (min(cap, jobs)); `--jobs 1` forces fully serial. See vgen/parallel.
+MAX_PARALLEL_AI = 2            # narration + scene-gen via the claude/codex CLI
+MAX_PARALLEL_EDGE_TTS = 4      # the free Edge service throttles above this
+MAX_PARALLEL_GEMINI_TTS = 2    # Gemini free-tier limits are stricter
+MAX_PARALLEL_RENDER = max(1, (os.cpu_count() or 4) - 2)   # Manim is CPU-bound
 
 # --- Too-dense-scene escalation (split a scene into smaller ones) ----------
 # Used when --validate-scenes is on. A scene is "too dense" when fitting it

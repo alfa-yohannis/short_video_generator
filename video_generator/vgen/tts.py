@@ -35,6 +35,7 @@ from typing import Optional, Tuple
 
 from . import config
 from .media import valid_audio, ffprobe_duration
+from .parallel import resolve_workers, run_parallel
 from .progress import progress
 from .subtitles import write_estimated_srt
 
@@ -82,6 +83,10 @@ class TtsEngine(ABC):
     default_voice: str = ""
     #: per-language default voices (overrides ``default_voice`` for that language).
     default_voices: dict = {}
+    #: how many (lang, scene) clips this engine may synthesise concurrently.
+    max_parallel: int = config.MAX_PARALLEL_EDGE_TTS
+    #: `--jobs` ceiling, injected by build_pipeline (None = use max_parallel as-is).
+    jobs: Optional[int] = None
 
     def voice_for(self, storyboard, lang: str) -> str:
         """The voice for a language: the storyboard's, else this engine's
@@ -96,12 +101,14 @@ class TtsEngine(ABC):
     def synthesize_storyboard(self, storyboard, output: Path, force: bool) -> None:
         """Template method: produce an mp3 + srt for every (language, scene).
 
-        The loop and the "skip what's already done" check are the same for every
-        engine; the per-clip work is delegated to :meth:`synthesize_scene` (which
-        is language-aware, so an engine can route a language to a different
-        provider or add a fallback).
+        The "skip what's already done" check is the same for every engine; the
+        per-clip work is delegated to :meth:`synthesize_scene` (which is
+        language-aware, so an engine can route a language to a different provider or
+        add a fallback). Each (language, scene) clip is independent (distinct mp3 +
+        srt), so they synthesise on a thread pool capped at ``max_parallel``.
         """
         self.prepare(storyboard)
+        work = []
         for lang in storyboard.languages:
             audio_dir = output / "audio" / lang
             audio_dir.mkdir(parents=True, exist_ok=True)
@@ -112,11 +119,17 @@ class TtsEngine(ABC):
                 srt = audio_dir / f"{scene.basename}.srt"
                 if valid_audio(mp3) and srt.exists() and not force:
                     continue
-                started = time.monotonic()
-                self.synthesize_scene(storyboard, lang, scene.basename,
-                                      scene.narration[lang], mp3, srt)
-                progress.log(f"    ↳ {lang}/{scene.basename}.mp3 in "
-                             f"{time.monotonic() - started:.1f}s")
+                work.append((lang, scene, mp3, srt))
+
+        def _synth(item) -> None:
+            lang, scene, mp3, srt = item
+            started = time.monotonic()
+            self.synthesize_scene(storyboard, lang, scene.basename,
+                                  scene.narration[lang], mp3, srt)
+            progress.log(f"    ↳ {lang}/{scene.basename}.mp3 in "
+                         f"{time.monotonic() - started:.1f}s")
+
+        run_parallel(work, _synth, resolve_workers(self.max_parallel, self.jobs))
 
     def synthesize_scene(self, storyboard, lang: str, basename: str, text: str,
                          mp3: Path, srt: Path) -> None:
@@ -323,6 +336,7 @@ class GeminiTtsEngine(TtsEngine):
     """Google Gemini voices over the REST API (PCM audio + estimated subtitles)."""
 
     name = "gemini"
+    max_parallel = config.MAX_PARALLEL_GEMINI_TTS
     default_voice = config.DEFAULT_GEMINI_VOICE
 
     def __init__(self, model: str = config.DEFAULT_GEMINI_MODEL,
@@ -489,30 +503,42 @@ class FallbackTtsEngine(TtsEngine):
                         audio_dir: Path, force: bool, *, stop_on_error: bool) -> bool:
         """Voice every scene of one language with ``engine`` at ``voice``.
 
-        Skips clips already present (unless ``force``). With ``stop_on_error`` it
-        returns ``False`` the moment a clip fails (so the caller can reproduce the
-        whole language elsewhere); otherwise a failure propagates — the secondary is
-        the safety net and must succeed. Returns ``True`` when the language is done.
+        Skips clips already present (unless ``force``). The scenes synthesise on a
+        thread pool (capped at the engine's ``max_parallel``). With ``stop_on_error``
+        a failed clip makes the whole language fail (return ``False``) so the caller
+        can reproduce it elsewhere — all-or-nothing, one consistent voice; otherwise
+        a failure propagates (the secondary is the safety net and must succeed).
+        Returns ``True`` when the language is done.
         """
+        work = []
         for scene in storyboard.scenes:
             mp3 = audio_dir / f"{scene.basename}.mp3"
             srt = audio_dir / f"{scene.basename}.srt"
             if valid_audio(mp3) and srt.exists() and not force:
                 continue
+            work.append((scene, mp3, srt))
+
+        def _one(item) -> None:
+            scene, mp3, srt = item
             progress.log(f"  {engine.name} {voice} -> {lang}/{scene.basename}…")
             started = time.monotonic()
             try:
                 engine.synthesize_one(scene.narration[lang], voice, mp3, srt)
-            except (Exception, SystemExit) as exc:   # noqa: BLE001
+            except (Exception, SystemExit):          # noqa: BLE001 - handled below
                 mp3.unlink(missing_ok=True)          # drop partial output
                 srt.unlink(missing_ok=True)
-                if not stop_on_error:
-                    raise
-                progress.log(f"    ⚠ {engine.name} failed for {lang}/{scene.basename} "
-                             f"({_brief(exc)}).")
-                return False
+                raise
             progress.log(f"    ↳ {lang}/{scene.basename}.mp3 in "
                          f"{time.monotonic() - started:.1f}s")
+
+        cap = getattr(engine, "max_parallel", config.MAX_PARALLEL_EDGE_TTS)
+        try:
+            run_parallel(work, _one, resolve_workers(cap, self.jobs))
+        except (Exception, SystemExit) as exc:       # noqa: BLE001
+            if not stop_on_error:
+                raise
+            progress.log(f"    ⚠ {engine.name} failed for a {lang} clip ({_brief(exc)}).")
+            return False
         return True
 
     def synthesize_one(self, text: str, voice: str, mp3: Path, srt: Path) -> None:
