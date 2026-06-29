@@ -262,6 +262,16 @@ def _write_runner(no: str, name: str, sb: Path, out: Path, pack: SubjectPack) ->
     logfile = TMP / f"{slugify(name)}.log"
     title = f"▶ {name}"
     flags = " ".join(pack.cli_flags) or "--tts edge --ai-cli claude --force"
+    # Bound each build's internal parallelism so that, with up to
+    # MAX_PARALLEL_BUILDS builds running at once, the TOTAL render concurrency
+    # stays near the core count instead of multiplying. Two builds each spawning
+    # ~14 render workers would swamp the box — and, before per-scene media_dir
+    # isolation, made concurrent Manim renders deadlock on their shared text-svg
+    # cache. The per-build --jobs cap keeps cross-build x within-build parallelism
+    # in check. An explicit --jobs in the subject's cli_flags wins.
+    if "--jobs" not in flags:
+        per_build_jobs = max(1, ((os.cpu_count() or 4) - 2) // MAX_PARALLEL_BUILDS)
+        flags = f"{flags} --jobs {per_build_jobs}"
     runner.write_text(
         "#!/usr/bin/env bash\n"
         'export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"\n'

@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
-from . import config
+from . import bumpers, config
 from .ai_client import create_ai_client
 from .assembly import ClipAssembler
 from .density import SceneTooDenseError
@@ -65,6 +65,7 @@ class BuildOptions:
     no_ai_cli_check: bool = False
     jobs: Optional[int] = None         # parallelism ceiling; None = per-stage caps, 1 = serial
     no_fit_narration: bool = False     # keep narration verbatim (skip the duration-fitter passes)
+    no_bumpers: bool = False           # don't splice the engagement/end bumper clips
 
 
 class VideoPipeline:
@@ -226,6 +227,8 @@ def apply_cli_overrides(storyboard: Storyboard, options: BuildOptions) -> None:
         storyboard.orientations = [options.orientation]
     if options.gemini_api_key:
         storyboard.gemini_api_key = options.gemini_api_key
+    if options.no_bumpers:
+        storyboard.bumpers = False
 
 
 def run_build(options: BuildOptions) -> None:
@@ -275,7 +278,9 @@ def run_build(options: BuildOptions) -> None:
     # (--force already wiped above, before the storyboard was chosen.)
     regenerate = False
     if options.refine_storyboard:
-        cap = storyboard.max_duration or config.DEFAULT_DURATION_CAP_SECONDS
+        reserved = (bumpers.reservation(storyboard.orientations, storyboard.languages)
+                    if storyboard.bumpers else 0.0)
+        cap = (storyboard.max_duration or config.DEFAULT_DURATION_CAP_SECONDS) - reserved
         refined = StoryboardRefiner(create_ai_client(storyboard.ai_cli, options.effort)).refine(
             storyboard, output, cap)
         if _scenes_changed(storyboard, refined):
@@ -288,6 +293,12 @@ def run_build(options: BuildOptions) -> None:
     if regenerate:
         _wipe_outputs(output)
     output.mkdir(parents=True, exist_ok=True)
+
+    # Reserve the spliced bumpers' running time out of the cap so main + bumpers
+    # still fits the ceiling (the DurationFitter targets max_duration - this).
+    if storyboard.bumpers:
+        storyboard.reserved_duration = bumpers.reservation(
+            storyboard.orientations, storyboard.languages)
 
     _print_header(storyboard, output)
     # Optional agentic pre-pass: actually carry out the # Preparation block (fetch

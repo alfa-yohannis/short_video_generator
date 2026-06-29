@@ -46,6 +46,7 @@ def make_storyboard(**overrides):
         gemini_api_key=None, ai_cli="claude", fps=30,
         resolution_landscape=(1920, 1080), scenes_landscape_dir=None,
         scenes_portrait_dir=None, scenes=[], project_brief="",
+        bumpers=False,   # isolate tests from the bundled bumper clips unless opted in
     )
     defaults.update(overrides)
     return Storyboard(**defaults)

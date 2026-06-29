@@ -28,6 +28,10 @@ from pathlib import Path
 # generator root and three parents up is the repository root.
 GENERATOR_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATES_DIR = GENERATOR_ROOT / "templates"
+# Pre-rendered bumper clips spliced into every main video: the engagement clip
+# after the first scene, the end clip at the very end. Files are named
+# <kind>_<orient>_<lang>.mp4 (+ .srt), kind in {engagement, end}.
+BUMPERS_DIR = GENERATOR_ROOT / "bumpers"
 REPO_ROOT = GENERATOR_ROOT.parent
 REQUIREMENTS = GENERATOR_ROOT / "requirements.txt"
 
@@ -136,10 +140,28 @@ ESTIMATE_WORDS_PER_SECOND = 2.0
 # Each per-scene stage runs its independent (subprocess-bound) units on a thread
 # pool, capped per stage to respect rate limits / CPU. A `--jobs N` flag can only
 # LOWER these (min(cap, jobs)); `--jobs 1` forces fully serial. See vgen/parallel.
-MAX_PARALLEL_AI = 2            # narration + scene-gen via the claude/codex CLI
+#
+# Anything that drives an AI/LLM model runs SEQUENTIALLY (cap 1): the claude/codex
+# CLI (narration + scene-gen) and Gemini TTS. Concurrent LLM calls burn the
+# provider's session/rate limit far faster (and, with --validate-scenes, used to
+# fan out concurrent Manim validation renders that contended). Only the mechanical
+# stages parallelise: Manim render (CPU-bound) and the free Edge TTS service.
+MAX_PARALLEL_AI = 1            # narration + scene-gen via the claude/codex CLI (LLM → serial)
 MAX_PARALLEL_EDGE_TTS = 4      # the free Edge service throttles above this
-MAX_PARALLEL_GEMINI_TTS = 2    # Gemini free-tier limits are stricter
+MAX_PARALLEL_GEMINI_TTS = 1    # Gemini is an LLM service → serial like the AI CLI
 MAX_PARALLEL_RENDER = max(1, (os.cpu_count() or 4) - 2)   # Manim is CPU-bound
+
+# A single Manim render/check that runs longer than this is treated as HUNG: it is
+# killed and retried rather than blocking the whole build forever. Real renders
+# finish in well under a minute at -ql and a few minutes at full resolution, so
+# this is a safety ceiling (not a normal-case budget). It is the backstop for the
+# concurrent-render contention that used to deadlock a worker indefinitely; the
+# primary fix is the per-scene media_dir isolation in vgen/renderer.py.
+MANIM_RENDER_TIMEOUT_SECONDS = float(
+    os.environ.get("MANIM_RENDER_TIMEOUT_SECONDS", "900"))
+# How many times to re-run a render that was killed for overrunning the ceiling
+# (a hung render is environmental, so a fresh attempt usually clears it).
+MANIM_HUNG_RETRIES = 1
 
 # --- Too-dense-scene escalation (split a scene into smaller ones) ----------
 # Used when --validate-scenes is on. A scene is "too dense" when fitting it

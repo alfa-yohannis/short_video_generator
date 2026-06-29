@@ -66,9 +66,13 @@ class Storyboard:
     template: str = ""        # which templates/<name>/ presentation scaffold ("" -> subject's, else default)
     min_duration: Optional[float] = None  # whole-video floor in seconds, or None
     max_duration: Optional[float] = None  # whole-video cap in seconds, or None
+    bumpers: bool = True      # splice the engagement (after scene 1) + end (at end) bumper clips
     # Runtime-only (never serialized): where --run-preparation saved reference
     # symbols for this build, if it ran and produced any.
     prep_assets_dir: Optional[Path] = None
+    # Runtime-only: seconds reserved out of max_duration for the spliced bumpers,
+    # so the main scenes + bumpers still fit the cap. Set by the pipeline.
+    reserved_duration: float = 0.0
 
     # --- tiny derived helpers (no side effects) ---------------------------
 

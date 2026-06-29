@@ -2249,3 +2249,21 @@ def test_run_parallel_actually_runs_concurrently():
         return x
 
     assert sorted(run_parallel(list(range(n)), fn, n)) == list(range(n))
+
+
+# --- bumpers (engagement/end splicing) -----------------------------------
+
+def test_bumpers_frontmatter_flag(tmp_path):
+    base = "---\ntitle: t\nlength: 2-3 minutes\n{extra}---\n# T\n\n## Scene (~150s)\nA description.\n"
+    off = tmp_path / "off.md"; off.write_text(base.format(extra="bumpers: false\n"))
+    on = tmp_path / "on.md"; on.write_text(base.format(extra=""))
+    assert StoryboardParser().parse(off).bumpers is False
+    assert StoryboardParser().parse(on).bumpers is True            # default on
+
+
+def test_duration_cap_reserves_bumper_time():
+    from vgen.duration import DurationFitter
+    sb = make_storyboard(max_duration=180.0)
+    sb.reserved_duration = 16.0
+    assert DurationFitter._cap(sb) == pytest.approx(164.0)         # cap minus reservation
+    assert DurationFitter._cap(make_storyboard(max_duration=None)) is None

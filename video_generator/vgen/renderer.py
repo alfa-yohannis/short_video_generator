@@ -57,6 +57,30 @@ _RENDER_ERROR_RE = re.compile(r"\b([A-Za-z_][\w.]*(?:Error|Exception))\b\s*:\s*(
 _SCENE_LOC_RE = re.compile(r"(scene_[\w./-]+\.py)[:\s]+(\d+)\s+in\s+(\w+)")
 
 
+def run_manim(command: List[str], env: dict, cwd: str) -> subprocess.CompletedProcess:
+    """Run one ``manim`` invocation with a hang ceiling.
+
+    A render that overruns ``config.MANIM_RENDER_TIMEOUT_SECONDS`` is killed and
+    re-tried a couple of times — a hung render is environmental (resource
+    contention), not a code bug. If every attempt overruns, a synthetic non-zero
+    result (returncode 124, the conventional timeout code) is returned so callers
+    handle it on their normal render-failure path. This is the backstop that stops
+    one stuck render from blocking the whole build forever.
+    """
+    attempts = config.MANIM_HUNG_RETRIES + 1
+    for i in range(attempts):
+        try:
+            return subprocess.run(command, env=env, cwd=cwd,
+                                  capture_output=True, text=True,
+                                  timeout=config.MANIM_RENDER_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            progress.log(f"    manim exceeded {config.MANIM_RENDER_TIMEOUT_SECONDS:.0f}s "
+                         f"— killed as hung (attempt {i + 1}/{attempts})")
+    msg = (f"manim render hung past {config.MANIM_RENDER_TIMEOUT_SECONDS:.0f}s "
+           f"and was killed after {attempts} attempt(s)")
+    return subprocess.CompletedProcess(command, returncode=124, stdout="", stderr=msg)
+
+
 def extract_render_error(text: str) -> str:
     """Pull the failing exception (e.g. ``NameError: name 'X' is not defined``)
     out of Manim's output, with the scene ``file:line`` for context. Returns
@@ -93,7 +117,9 @@ class SceneValidator:
         if not config.MANIM_BIN.exists():
             raise SystemExit(f"manim binary not found at {config.MANIM_BIN}")
         scene_path = scenes_dir / scene.file
-        media_dir = output / "manim_check" / lang / orient
+        # Per-scene media_dir so concurrent checks never share Manim's texts/<hash>
+        # .svg cache (identical strings across scenes collide on one temp file).
+        media_dir = output / "manim_check" / lang / orient / scene.basename
         media_dir.mkdir(parents=True, exist_ok=True)
         env = os.environ.copy()
         env["MANIM_LANG"] = lang
@@ -102,11 +128,12 @@ class SceneValidator:
         env["MANIM_CHECK_LAYOUT"] = check_layout
         command = [str(config.MANIM_BIN), "-ql", "--media_dir", str(media_dir),
                    str(scene_path), scene.classname]
-        proc = subprocess.run(command, env=env, cwd=str(scenes_dir),
-                              capture_output=True, text=True)
+        proc = run_manim(command, env, str(scenes_dir))
         combined = (proc.stdout or "") + (proc.stderr or "")
         layout = extract_layout_issues(combined)
         problem = layout or extract_render_error(combined)
+        if proc.returncode != 0 and not problem:        # e.g. a killed-as-hung render
+            problem = (proc.stderr or "").strip() or f"render failed (exit {proc.returncode})"
         # In strict mode a violation makes manim exit non-zero, so a clean exit
         # means no layout problem and no crash.
         ok = proc.returncode == 0 and not problem
@@ -141,9 +168,7 @@ class ManimRenderer:
                 if scenes_dir is None or not scenes_dir.exists():
                     raise SystemExit(f"scenes_{orient}_dir does not exist: {scenes_dir}")
                 video_dir = output / "video" / lang / orient
-                media_dir = output / "manim_media" / lang / orient
                 video_dir.mkdir(parents=True, exist_ok=True)
-                media_dir.mkdir(parents=True, exist_ok=True)
                 env = self._render_env(output, lang, check_layout)
                 common_path = scenes_dir / "_common.py"
                 for scene in storyboard.scenes:
@@ -153,6 +178,14 @@ class ManimRenderer:
                         raise SystemExit(f"Scene file missing: {scene_path}")
                     if not force and is_up_to_date(dest, scene_path, common_path):
                         continue
+                    # Each render gets its OWN media_dir: Manim caches every text as
+                    # manim_media/.../texts/<hash>.svg keyed only by text+font, so two
+                    # concurrent renders of the same string (e.g. a shared title bar)
+                    # race on one temp .svg — one unlinks it while the other reads it
+                    # -> FileNotFoundError, or a worker hangs on the contended file.
+                    # Per-scene dirs isolate that cache so parallel renders can't collide.
+                    media_dir = output / "manim_media" / lang / orient / scene.basename
+                    media_dir.mkdir(parents=True, exist_ok=True)
                     work.append((scene, lang, orient, scenes_dir, media_dir, dest, env))
 
         def _one(item) -> None:
@@ -171,9 +204,7 @@ class ManimRenderer:
             raise SystemExit(f"manim binary not found at {config.MANIM_BIN}")
 
         video_dir = output / "video" / lang / orient
-        media_dir = output / "manim_media" / lang / orient
         video_dir.mkdir(parents=True, exist_ok=True)
-        media_dir.mkdir(parents=True, exist_ok=True)
         env = self._render_env(output, lang, check_layout)
         common_path = scenes_dir / "_common.py"
 
@@ -186,6 +217,9 @@ class ManimRenderer:
             # scene .py or refreshed _common.py makes it stale).
             if not force and is_up_to_date(dest, scene_path, common_path):
                 continue
+            # Per-scene media_dir — see render_all for why (texts/ svg cache race).
+            media_dir = output / "manim_media" / lang / orient / scene.basename
+            media_dir.mkdir(parents=True, exist_ok=True)
             self._render_one(storyboard, scene, lang, orient, scenes_dir, media_dir,
                              dest, env, repair_attempts)
 
@@ -220,8 +254,7 @@ class ManimRenderer:
         # AI repair is enabled only when an AI CLI is configured.
         max_repairs = repair_attempts if storyboard.ai_cli not in ("", "none", None) else 0
         for attempt in range(max_repairs + 1):
-            proc = subprocess.run(command, env=env, cwd=str(scenes_dir),
-                                  capture_output=True, text=True)
+            proc = run_manim(command, env, str(scenes_dir))
             if proc.stdout:
                 sys.stdout.write(proc.stdout)
             if proc.stderr:

@@ -281,8 +281,19 @@ class StoryboardParser:
             template=str(cfg.get("template") or "").strip().lower(),
             min_duration=min_duration,
             max_duration=max_duration,
+            bumpers=self._read_bool(cfg.get("bumpers"), True),
             prep_assets_dir=self._read_assets_dir(cfg, base),
         )
+
+    @staticmethod
+    def _read_bool(value, default: bool) -> bool:
+        """Coerce a front-matter flag to bool (YAML bools pass through; strings
+        like 'false'/'no'/'off'/'0' read as False). ``None`` -> ``default``."""
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() not in ("false", "no", "off", "0", "")
 
     @staticmethod
     def _read_subject(cfg: dict) -> str:

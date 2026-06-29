@@ -1,0 +1,12 @@
+1
+00:00:00,100 --> 00:00:02,450
+Masih ada yang belum jelas?
+
+2
+00:00:02,400 --> 00:00:05,312
+Tulis pertanyaan atau komentar di bawah.
+
+3
+00:00:05,312 --> 00:00:07,050
+Terima kasih!
+

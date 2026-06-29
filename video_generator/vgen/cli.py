@@ -133,6 +133,11 @@ def build_parser() -> argparse.ArgumentParser:
              "provide exact narration scripts and don't want them rewritten.",
     )
     parser.add_argument(
+        "--no-bumpers", action="store_true",
+        help="Don't splice the engagement (after scene 1) / end (at the end) bumper "
+             "clips into the final video. (Overrides the storyboard's bumpers: flag.)",
+    )
+    parser.add_argument(
         "--jobs", type=int, default=None, metavar="N",
         help="Parallelism ceiling for the per-scene stages (narration, TTS, scene "
              "generation, render). Default: per-stage caps (AI 2, Edge-TTS 4, "
@@ -168,6 +173,7 @@ def options_from_args(args: argparse.Namespace) -> BuildOptions:
         no_ai_cli_check=args.no_ai_cli_check,
         jobs=args.jobs,
         no_fit_narration=args.no_fit_narration,
+        no_bumpers=args.no_bumpers,
     )
 
 

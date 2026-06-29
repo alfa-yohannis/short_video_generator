@@ -211,3 +211,31 @@ def test_edge_audio_generation_live(tmp_path):
     assert mp3.exists() and mp3.stat().st_size > 0
     assert (tmp_path / "audio" / "id" / "01_x.srt").exists()
     assert media.ffprobe_duration(mp3) > 0.5
+
+
+@requires("ffmpeg", "ffprobe")
+def test_concat_splices_bumpers_in_order(tmp_path, monkeypatch):
+    """Engagement bumper after the FIRST scene, end bumper at the END — and the
+    final length is the sum (scenes + both bumpers)."""
+    from vgen import config as _config
+    bdir = tmp_path / "bumpers"
+    bdir.mkdir()
+    monkeypatch.setattr(_config, "BUMPERS_DIR", bdir)
+    color_video(bdir / "engagement_landscape_id.mp4", seconds=2.0)
+    color_video(bdir / "end_landscape_id.mp4", seconds=3.0)
+
+    sb = make_storyboard(title="demo", languages=["id"], orientations=["landscape"],
+                         scenes=[_scene("01_a"), _scene("02_b")], bumpers=True)
+    lang, orient = "id", "landscape"
+    cdir = tmp_path / "clips" / lang / orient
+    cdir.mkdir(parents=True)
+    for sc in sb.scenes:
+        color_video(cdir / f"{sc.basename}.mp4", seconds=1.0)
+
+    asm = ClipAssembler()
+    names = [c.name for c, _ in asm._final_sequence(sb, tmp_path, lang, orient)]
+    assert names == ["01_a.mp4", "engagement_landscape_id.mp4",
+                     "02_b.mp4", "end_landscape_id.mp4"]
+
+    final = asm.concat(sb, tmp_path, lang, orient)
+    assert media.ffprobe_duration(final) == pytest.approx(1 + 2 + 1 + 3, abs=0.5)

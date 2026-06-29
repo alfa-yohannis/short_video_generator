@@ -42,22 +42,31 @@ class DurationFitter:
         self.ai = ai_client
         self.tts = tts_engine
 
+    @staticmethod
+    def _cap(storyboard: Storyboard) -> Optional[float]:
+        """The cap the fitter actually targets: ``max_duration`` minus any seconds
+        reserved for spliced bumpers, so ``main scenes + bumpers`` fits the ceiling.
+        ``None`` when the storyboard sets no cap."""
+        if storyboard.max_duration is None:
+            return None
+        return max(0.0, storyboard.max_duration - storyboard.reserved_duration)
+
     # --- the two public passes --------------------------------------------
 
     def fit_before_tts(self, storyboard: Storyboard, output: Path,
                        margin: float = 0.92, passes: int = 2) -> None:
         """Estimate-and-shorten over-long narration *before* any audio is made."""
-        if storyboard.max_duration is None or storyboard.ai_cli in ("", "none", None):
+        cap = self._cap(storyboard)
+        if cap is None or storyboard.ai_cli in ("", "none", None):
             return
         for lang in storyboard.languages:
             for _ in range(passes):
                 total = sum(self._scene_seconds(storyboard, output, lang, sc, measured=False)
                             for sc in storyboard.scenes)
-                if total <= storyboard.max_duration:
+                if total <= cap:
                     break
                 progress.log(f"  [{lang}] estimated narration {total:.0f}s > cap "
-                             f"{storyboard.max_duration:.0f}s — compressing to "
-                             f"~{storyboard.max_duration * margin:.0f}s")
+                             f"{cap:.0f}s — compressing to ~{cap * margin:.0f}s")
                 if not self._shrink_language(storyboard, output, lang, total,
                                              measured=False, margin=margin):
                     break
@@ -65,17 +74,18 @@ class DurationFitter:
     def enforce_after_tts(self, storyboard: Storyboard, output: Path,
                           margin: float = 0.92, passes: int = 2) -> None:
         """Measure real audio and, if still over, shorten + re-synthesise."""
-        if storyboard.max_duration is None or storyboard.ai_cli in ("", "none", None):
+        cap = self._cap(storyboard)
+        if cap is None or storyboard.ai_cli in ("", "none", None):
             return
         for _ in range(passes):
             regenerated = False
             for lang in storyboard.languages:
                 total = sum(self._scene_seconds(storyboard, output, lang, sc, measured=True)
                             for sc in storyboard.scenes)
-                if total <= storyboard.max_duration:
+                if total <= cap:
                     continue
                 progress.log(f"  [{lang}] rendered audio {total:.0f}s > cap "
-                             f"{storyboard.max_duration:.0f}s — compressing and re-synthesizing")
+                             f"{cap:.0f}s — compressing and re-synthesizing")
                 if self._shrink_language(storyboard, output, lang, total,
                                          measured=True, margin=margin):
                     regenerated = True
@@ -180,7 +190,7 @@ class DurationFitter:
         Rewrites the script file and (when measuring real audio) drops the stale
         mp3/srt so they regenerate. Returns True if anything changed.
         """
-        scale = (storyboard.max_duration * margin) / total
+        scale = (self._cap(storyboard) * margin) / total
         changed = False
         for scene in storyboard.scenes:
             current = scene.narration.get(lang, "")
@@ -223,8 +233,9 @@ class DurationFitter:
         from the longer text. Returns True if anything changed.
         """
         target_total = floor * margin
-        if storyboard.max_duration is not None:                 # never blow the cap
-            target_total = max(floor, min(target_total, storyboard.max_duration * 0.95))
+        cap = self._cap(storyboard)
+        if cap is not None:                                     # never blow the cap
+            target_total = max(floor, min(target_total, cap * 0.95))
         if total <= 0:
             return False
         scale = target_total / total

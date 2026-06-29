@@ -16,9 +16,9 @@ from __future__ import annotations
 import subprocess
 from datetime import timedelta
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
-from . import config
+from . import bumpers, config
 from .media import ffprobe_duration, is_up_to_date
 from .models import Storyboard
 
@@ -77,20 +77,48 @@ class ClipAssembler:
                     "-shortest", "-movflags", "+faststart", str(clip)]
             subprocess.run(cmd, check=True)
 
+    def _final_sequence(self, storyboard: Storyboard, output: Path, lang: str,
+                        orient: str) -> "List[Tuple[Path, Optional[Path]]]":
+        """Ordered ``(clip, srt)`` for the final video: every scene clip, plus the
+        spliced bumpers when ``storyboard.bumpers`` is on — the engagement clip
+        right AFTER the first scene and the end clip at the very END. A bumper is
+        skipped if it isn't bundled for this ``(orient, lang)``. The srt may be
+        ``None`` (a clip with no subtitles)."""
+        clip_dir = output / "clips" / lang / orient
+        audio_dir = output / "audio" / lang
+        seq: "List[Tuple[Path, Optional[Path]]]" = []
+        for i, scene in enumerate(storyboard.scenes):
+            seq.append((clip_dir / f"{scene.basename}.mp4",
+                        audio_dir / f"{scene.basename}.srt"))
+            if i == 0 and storyboard.bumpers:
+                clip = bumpers.bumper_clip("engagement", orient, lang)
+                if clip is not None:
+                    seq.append((clip, bumpers.bumper_srt("engagement", orient, lang)))
+        if storyboard.bumpers:
+            clip = bumpers.bumper_clip("end", orient, lang)
+            if clip is not None:
+                seq.append((clip, bumpers.bumper_srt("end", orient, lang)))
+        return seq
+
     def concat(self, storyboard: Storyboard, output: Path, lang: str, orient: str,
                force: bool = False) -> Path:
-        """Concatenate a language+orientation's clips into one final video."""
+        """Concatenate a language+orientation's clips into one final video.
+
+        The sequence includes the spliced bumpers (engagement after scene 1, end at
+        the end) when the storyboard opts in — see :meth:`_final_sequence`.
+        """
         clip_dir = output / "clips" / lang / orient
         final_dir = output / "final"
         final_dir.mkdir(parents=True, exist_ok=True)
         final_path = final_dir / f"{storyboard.final_stem(orient, lang)}.mp4"
-        clips = [clip_dir / f"{sc.basename}.mp4" for sc in storyboard.scenes]
+        clips = [clip for clip, _ in self._final_sequence(storyboard, output, lang, orient)]
         # Skip the re-encode when the final is already newer than every clip.
         if not force and is_up_to_date(final_path, *clips):
             return final_path
+        # Absolute paths (bumpers live outside clip_dir); -safe 0 already allows them.
         list_path = clip_dir / "concat_list.txt"
         list_path.write_text(
-            "\n".join(f"file '{sc.basename}.mp4'" for sc in storyboard.scenes) + "\n",
+            "\n".join(f"file '{clip.resolve()}'" for clip in clips) + "\n",
             encoding="utf-8",
         )
         subprocess.run(
@@ -146,15 +174,12 @@ class ClipAssembler:
         """
         import srt as srt_lib  # lazy import so a missing dependency can be installed
 
-        audio_dir = output / "audio" / lang
         merged: List = []
         offset = timedelta(0)
         index = 1
-        for scene in storyboard.scenes:
-            clip = output / "clips" / lang / orient / f"{scene.basename}.mp4"
+        for clip, srt_path in self._final_sequence(storyboard, output, lang, orient):
             duration = timedelta(seconds=ffprobe_duration(clip))
-            srt_path = audio_dir / f"{scene.basename}.srt"
-            if srt_path.exists():
+            if srt_path is not None and srt_path.exists():
                 for cue in srt_lib.parse(srt_path.read_text(encoding="utf-8")):
                     merged.append(srt_lib.Subtitle(
                         index=index,

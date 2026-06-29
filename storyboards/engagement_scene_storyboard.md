@@ -3,6 +3,7 @@ title: engagement_scene
 language: both
 orientation: both
 length: 5-8 seconds
+bumpers: false
 ---
 
 # Engagement Scene

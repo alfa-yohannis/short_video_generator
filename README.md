@@ -609,6 +609,8 @@ python3 video_generator/generate_video.py --storyboard SB.md --output OUT --forc
 | `--skip-youtube` | off | Don't generate the `final/<title>_<orient>_<lang>.txt` metadata |
 | `--skip-dep-check` | off | Skip the startup dependency validation |
 | `--no-ai-cli-check` | off | Don't enforce AI CLI presence (every narration / scene `.py` pre-filled) |
+| `--no-fit-narration` | off | Keep narration **verbatim** — skip the duration-fitter passes (compress/expand/fill) that rewrite narration to hit the length window. Use when you provide exact narration scripts and don't want them touched (e.g. short CTA / engagement clips) |
+| `--no-bumpers` | off | Don't splice the engagement/end bumper clips into the final video (overrides the storyboard's `bumpers:` flag). See [Bumpers](#bumpers) |
 | `--jobs N` | *(per-stage caps)* | Parallelism ceiling for the per-scene stages (narration, TTS, scene-gen, render). Lowers every stage to `min(stage-cap, N)`; `--jobs 1` forces fully serial. See [Parallelism](#parallelism) |
 
 > `--force` removes only generator-owned subdirectories under `--output`
@@ -618,20 +620,65 @@ python3 video_generator/generate_video.py --storyboard SB.md --output OUT --forc
 
 ---
 
+## Bumpers (engagement + end clips)
+
+Every main video is automatically wrapped with two short pre-rendered **bumper**
+clips at concat time:
+
+- **engagement** — a "Like / Follow / Share" call-to-action, spliced in right
+  **after the first scene**;
+- **end** — a "comments / questions" closer, appended at the very **end**.
+
+Each kind has one clip per `(orientation, language)`, bundled at
+[`video_generator/bumpers/`](video_generator/bumpers/) as
+`<kind>_<orient>_<lang>.mp4` (+ a matching `.srt`, merged into the final
+subtitles at the right offset). The clips are produced from
+[`storyboards/engagement_scene_storyboard.md`](storyboards/) /
+`end_scene_storyboard.md` — **rebuild those and re-copy their `final/*.mp4`
+(+ `.srt`) into the bumpers dir to refresh them.**
+
+**Staying under 3 minutes.** The duration-fitter reserves the bumpers' running
+time out of the cap, so it budgets the **main scenes** to
+`max_duration − (engagement + end)` (the worst case across the build's
+orientations/languages). Main + bumpers then fits the ceiling. *This applies when
+the audio stage runs* — a build made before bumpers existed has main content sized
+to the full cap, so re-concatenating it with bumpers can run over; rebuild it
+(`--stage audio` onward, or `--force`) to re-budget.
+
+Opt out per storyboard with `bumpers: false` in the front-matter (the bumper
+storyboards themselves set this so they don't wrap themselves), or per run with
+`--no-bumpers`.
+
+---
+
 ## Parallelism
 
-The four per-scene stages each run their independent units **concurrently** on a
-thread pool (the work is all blocking `subprocess` calls, which release the GIL —
-so threads give real parallelism without multiprocessing). Each unit writes its
-own files and shares no state, so the output is identical to a serial run, just
-faster:
+The per-scene stages run their independent units on a thread pool (the work is all
+blocking `subprocess` calls, which release the GIL — so threads give real
+parallelism without multiprocessing). Each unit writes its own files and shares no
+state, so the output is identical to a serial run.
+
+**Anything that drives an AI/LLM model runs sequentially (cap 1)** — the
+`claude`/`codex` CLI (narration + scene generation) and Gemini TTS. Concurrent LLM
+calls burn the provider's session/rate limit far faster, and — with
+`--validate-scenes` — used to fan out concurrent Manim validation renders that
+contended on a shared cache. Only the mechanical stages parallelise: the Manim
+**render** (CPU-bound) and the free **Edge** TTS service.
 
 | Stage | Parallel unit | Default cap |
 |---|---|---|
-| narration | **scene** (the two languages stay sequential *within* a scene so the 2nd keeps the 1st as its meaning reference) | `MAX_PARALLEL_AI` = 2 |
-| TTS | **(language × scene)** — `id` and `en` voice concurrently | Edge 4, Gemini 2 |
-| scene generation | **(orientation × scene)** (after the one-time `_common.py` materialize) | `MAX_PARALLEL_AI` = 2 |
+| narration | **scene** (the two languages stay sequential *within* a scene so the 2nd keeps the 1st as its meaning reference) | `MAX_PARALLEL_AI` = **1** (LLM → serial) |
+| TTS | **(language × scene)** — `id` and `en` voice concurrently | Edge 4, Gemini **1** (LLM → serial) |
+| scene generation | **(orientation × scene)** (after the one-time `_common.py` materialize) | `MAX_PARALLEL_AI` = **1** (LLM → serial) |
 | render | **(language × orientation × scene)** | `MAX_PARALLEL_RENDER` = `cores − 2` |
+
+Each render also gets its **own** Manim `media_dir`
+(`manim_media/<lang>/<orient>/<scene>/`): Manim caches each text as
+`texts/<hash>.svg` keyed only by text+font, so two concurrent renders of the same
+string (e.g. a shared title bar) would otherwise race on one temp file — one
+unlinking it while the other reads it. A per-render hang ceiling
+(`MANIM_RENDER_TIMEOUT_SECONDS`, default 900s) kills + retries any render that
+overruns, so a single stuck render can never block the whole build.
 
 The caps are conservative on purpose — the AI CLI and the free Edge/Gemini TTS
 services rate-limit bursts; render is CPU-bound. They live in
